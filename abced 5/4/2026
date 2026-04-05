@@ -1,0 +1,1945 @@
+import { useState, useContext, createContext, useCallback, useEffect, useRef, memo, useMemo } from "react";
+import { motion, AnimatePresence, useSpring, useMotionValue } from "framer-motion";
+
+// ═══════════════════════════════════════════════════════════
+// § DESIGN TOKENS — single source of truth
+// ═══════════════════════════════════════════════════════════
+const TOKEN = {
+  // Brand palette
+  jade:    { 50:"#f0faf0", 100:"#dcf5dc", 200:"#b8ecb8", 300:"#82da82", 400:"#4ec94e", 500:"#28a428", 600:"#1e7d1e", 700:"#175c17", 800:"#114011", 900:"#0b290b" },
+  slate:   { 50:"#f8fafb", 100:"#f1f4f7", 200:"#e2e8ef", 300:"#c8d3de", 400:"#94a3b4", 500:"#637383", 600:"#445566", 700:"#334455", 800:"#1e2d3d", 900:"#111927" },
+  amber:   { 50:"#fffbeb", 100:"#fef3c7", 200:"#fde08a", 400:"#f59e0b", 600:"#d97706", 800:"#92400e" },
+  rose:    { 50:"#fff1f2", 100:"#ffe4e6", 400:"#fb7185", 600:"#e11d48", 800:"#9f1239" },
+  blue:    { 50:"#eff6ff", 100:"#dbeafe", 400:"#60a5fa", 600:"#2563eb", 800:"#1e3a8a" },
+  // Semantic
+  success: "#16a34a",
+  warning: "#d97706",
+  danger:  "#dc2626",
+  info:    "#2563eb",
+};
+
+// ═══════════════════════════════════════════════════════════
+// § ANIMATION PRESETS — framer motion variants
+// ═══════════════════════════════════════════════════════════
+const anim = {
+  page: {
+    initial: { opacity: 0, y: 18, filter: "blur(4px)" },
+    animate: { opacity: 1, y: 0,  filter: "blur(0px)", transition: { duration: 0.38, ease: [0.22, 1, 0.36, 1] } },
+    exit:    { opacity: 0, y: -10, filter: "blur(2px)", transition: { duration: 0.22, ease: "easeIn" } },
+  },
+  stagger: { animate: { transition: { staggerChildren: 0.055 } } },
+  fadeUp: {
+    initial: { opacity: 0, y: 16 },
+    animate: { opacity: 1, y: 0,  transition: { duration: 0.32, ease: "easeOut" } },
+  },
+  scaleIn: {
+    initial: { opacity: 0, scale: 0.92 },
+    animate: { opacity: 1, scale: 1,   transition: { duration: 0.34, ease: [0.34, 1.4, 0.64, 1] } },
+  },
+  slideRight: {
+    initial: { opacity: 0, x: -14 },
+    animate: { opacity: 1, x: 0,  transition: { duration: 0.28, ease: "easeOut" } },
+    exit:    { opacity: 0, x: 20, scale: 0.96, transition: { duration: 0.2 } },
+  },
+  cardItem: {
+    initial: { opacity: 0, y: 12 },
+    animate: { opacity: 1, y: 0,  transition: { duration: 0.28, ease: "easeOut" } },
+    exit:    { opacity: 0, x: 36, scale: 0.95, transition: { duration: 0.2 } },
+  },
+  shimmer: {
+    animate: { backgroundPosition: ["200% 0", "-200% 0"] },
+    transition: { duration: 1.8, repeat: Infinity, ease: "linear" },
+  },
+};
+
+// ═══════════════════════════════════════════════════════════
+// § HOOKS
+// ═══════════════════════════════════════════════════════════
+const useBreakpoint = () => {
+  const get = () => {
+    const w = typeof window !== "undefined" ? window.innerWidth : 375;
+    return { isMobile: w < 640, isTablet: w >= 640 && w < 1024, isDesktop: w >= 1024 };
+  };
+  const [bp, setBp] = useState(get);
+  useEffect(() => {
+    const h = () => setBp(get());
+    window.addEventListener("resize", h);
+    return () => window.removeEventListener("resize", h);
+  }, []);
+  return bp;
+};
+
+const useToast = () => {
+  const [toasts, setToasts] = useState([]);
+  const show = useCallback((msg, type = "success", ms = 2800) => {
+    const id = Date.now();
+    setToasts(p => [...p, { id, msg, type }]);
+    setTimeout(() => setToasts(p => p.filter(t => t.id !== id)), ms);
+  }, []);
+  return [toasts, show];
+};
+
+const usePrevious = (val) => {
+  const ref = useRef();
+  useEffect(() => { ref.current = val; });
+  return ref.current;
+};
+
+// ═══════════════════════════════════════════════════════════
+// § CONTEXT
+// ═══════════════════════════════════════════════════════════
+const AppCtx = createContext(null);
+const useApp = () => useContext(AppCtx);
+
+const MOCK_CUSTOMERS = [
+  { id: 1, name: "Arjun Sharma",  token: "T-001", status: "Waiting",   time: "10:05 AM", phone: "+91 98765 43210" },
+  { id: 2, name: "Priya Patel",   token: "T-002", status: "Waiting",   time: "10:12 AM", phone: "+91 87654 32109" },
+  { id: 3, name: "Rahul Verma",   token: "T-003", status: "Waiting",   time: "10:18 AM", phone: "+91 76543 21098" },
+  { id: 4, name: "Sneha Gupta",   token: "T-004", status: "Waiting",   time: "10:25 AM", phone: "+91 65432 10987" },
+  { id: 5, name: "Aditya Joshi",  token: "T-005", status: "Completed", time: "09:50 AM", phone: "+91 54321 09876" },
+];
+const MOCK_COORDS = [
+  { id: 1, email: "suresh@hospital.com", name: "Dr. Suresh Kumar", role: "Senior Doctor" },
+  { id: 2, email: "pooja@hospital.com",  name: "Nurse Pooja Singh", role: "Head Nurse" },
+];
+const MOCK_CLIENT  = { name: "Kiran Mehta", token: "T-006", position: 3, estimatedWait: 15, status: "Waiting" };
+const MOCK_STATS   = { total: 34, waiting: 12, completed: 18, missed: 4, avgWait: 8 };
+
+const AppProvider = ({ children }) => {
+  const [user,      setUser]      = useState(null);
+  const [page,      setPage]      = useState("auth");
+  const [customers, setCustomers] = useState(MOCK_CUSTOMERS);
+  const [coords,    setCoords]    = useState(MOCK_COORDS);
+  const [fields,    setFields]    = useState([]);
+
+  const nav    = useCallback(p => setPage(p), []);
+  const login  = useCallback((email, role) => {
+    setUser({ email, role });
+    setPage(role === "client" ? "client-dash" : "admin-dash");
+  }, []);
+  const logout = useCallback(() => { setUser(null); setFields([]); setPage("auth"); }, []);
+
+  const nextCustomer   = useCallback(() => setCustomers(p => {
+    const w = p.find(c => c.status === "Waiting");
+    return w ? p.map(c => c.id === w.id ? { ...c, status: "Completed" } : c) : p;
+  }), []);
+  const skipCustomer   = useCallback(() => setCustomers(p => {
+    const i = p.findIndex(c => c.status === "Waiting");
+    if (i === -1 || i === p.length - 1) return p;
+    const u = [...p]; [u[i], u[i + 1]] = [u[i + 1], u[i]]; return u;
+  }), []);
+  const removeCustomer = useCallback(id => setCustomers(p => p.filter(c => c.id !== id)), []);
+  const addCoord       = useCallback(({ email, name, role }) =>
+    setCoords(p => [...p, { id: Date.now(), email, name: name || email.split("@")[0], role: role || "Coordinator" }]), []);
+  const removeCoord    = useCallback(id => setCoords(p => p.filter(c => c.id !== id)), []);
+  const addField       = useCallback(f => setFields(p => [...p, { ...f, id: Date.now() }]), []);
+  const removeField    = useCallback(id => setFields(p => p.filter(f => f.id !== id)), []);
+
+  const value = useMemo(() => ({
+    user, page, nav, login, logout,
+    customers, nextCustomer, skipCustomer, removeCustomer,
+    coords, addCoord, removeCoord,
+    fields, addField, removeField,
+    stats: MOCK_STATS, clientData: MOCK_CLIENT,
+  }), [user, page, customers, coords, fields]);
+
+  return <AppCtx.Provider value={value}>{children}</AppCtx.Provider>;
+};
+
+// ═══════════════════════════════════════════════════════════
+// § ICON LIBRARY
+// ═══════════════════════════════════════════════════════════
+const Icon = {
+  Grid:     (p) => <svg {...p} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="2" width="7" height="7" rx="1.5"/><rect x="11" y="2" width="7" height="7" rx="1.5"/><rect x="2" y="11" width="7" height="7" rx="1.5"/><rect x="11" y="11" width="7" height="7" rx="1.5"/></svg>,
+  Users:    (p) => <svg {...p} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="7.5" cy="6" r="3"/><path d="M1 18c0-3.5 2.5-5.5 6.5-5.5s6.5 2 6.5 5.5"/><path d="M13.5 4a3 3 0 010 6M17.5 18c0-3-1.8-4.8-4-5.4"/></svg>,
+  Clipboard:(p) => <svg {...p} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="3" width="12" height="15" rx="2"/><path d="M7 8h6M7 12h4.5M7.5 3V2h5v1"/></svg>,
+  UserPlus: (p) => <svg {...p} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="7.5" cy="6" r="3"/><path d="M1 18c0-3.5 2.5-5.5 6.5-5.5s6.5 2 6.5 5.5"/><path d="M15 9v6M12 12h6"/></svg>,
+  Target:   (p) => <svg {...p} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><circle cx="10" cy="10" r="8"/><circle cx="10" cy="10" r="4.5"/><circle cx="10" cy="10" r="1.5" fill="currentColor"/></svg>,
+  PenLine:  (p) => <svg {...p} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M13.5 2.5l4 4L6 18H2v-4L13.5 2.5z"/><path d="M1 19h18"/></svg>,
+  LogOut:   (p) => <svg {...p} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M7.5 17H3.5a1 1 0 01-1-1V4a1 1 0 011-1h4"/><path d="M13.5 13.5l3.5-3.5-3.5-3.5M17 10H8"/></svg>,
+  ChevronR: (p) => <svg {...p} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M7.5 5l5 5-5 5"/></svg>,
+  Play:     (p) => <svg {...p} viewBox="0 0 20 20" fill="currentColor"><path d="M5 3.5l12 6.5-12 6.5V3.5z"/></svg>,
+  Skip:     (p) => <svg {...p} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><path d="M4 5l7 5-7 5V5z" fill="currentColor" stroke="none"/><line x1="16" y1="5" x2="16" y2="15"/></svg>,
+  X:        (p) => <svg {...p} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M4 4l12 12M16 4L4 16"/></svg>,
+  Plus:     (p) => <svg {...p} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M10 3v14M3 10h14"/></svg>,
+  Bolt:     (p) => <svg {...p} viewBox="0 0 20 20" fill="currentColor"><path d="M11 2L4 11h6l-1 7 8-10h-6l1-6z"/></svg>,
+  Info:     (p) => <svg {...p} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><circle cx="10" cy="10" r="8"/><path d="M10 9v5"/><circle cx="10" cy="6.5" r="0.75" fill="currentColor" stroke="none"/></svg>,
+  Check:    (p) => <svg {...p} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M3 10l5 5 9-9"/></svg>,
+  Leaf:     (p) => <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M20 4C13 4 6 10 6 19c2.5-5 6-8.5 14-8.5V4z"/><path d="M6 19c1-2.5 3.5-5 7-6"/></svg>,
+  Google:   (p) => <svg {...p} viewBox="0 0 20 20" fill="none"><path d="M18.2 10.25c0-.5 0-1-.12-1.5H10v2.85h4.6c-.2 1.1-.88 2-1.86 2.65v2.2h3c1.65-1.55 2.46-3.8 2.46-6.2z" fill="#4285F4"/><path d="M10 19c2.3 0 4.22-.76 5.62-2.05l-3-2.2c-.76.5-1.73.8-2.62.8-2.22 0-4.1-1.5-4.77-3.5H2.14v2.27C3.53 17.15 6.56 19 10 19z" fill="#34A853"/><path d="M5.23 12.05A5.5 5.5 0 015 10.5c0-.54.1-1.06.23-1.55V6.68H2.14A8.99 8.99 0 001 10.5c0 1.45.35 2.82.95 4.02l3.28-2.47z" fill="#FBBC05"/><path d="M10 4.5c1.27 0 2.4.43 3.3 1.28l2.47-2.47C14.2 1.95 12.27 1 10 1 6.56 1 3.53 2.85 2.14 5.68L5.4 8.15C6.1 6.15 7.78 4.5 10 4.5z" fill="#EA4335"/></svg>,
+  Bell:     (p) => <svg {...p} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><path d="M10 2a6 6 0 00-6 6c0 3.5-1.5 5-1.5 5h15S16 11.5 16 8a6 6 0 00-6-6z"/><path d="M11.7 16a1.7 1.7 0 01-3.4 0"/></svg>,
+  Clock:    (p) => <svg {...p} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><circle cx="10" cy="10" r="8"/><path d="M10 6v4l2.5 2.5"/></svg>,
+  Sparkles: (p) => <svg {...p} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M10 2v2M10 16v2M2 10h2M16 10h2M4.5 4.5l1.5 1.5M14 14l1.5 1.5M14 4.5L12.5 6M6 14l-1.5 1.5M10 7a3 3 0 100 6 3 3 0 000-6z"/></svg>,
+  QR:       (p) => <svg {...p} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="2" width="6" height="6" rx="1"/><rect x="12" y="2" width="6" height="6" rx="1"/><rect x="2" y="12" width="6" height="6" rx="1"/><rect x="4" y="4" width="2" height="2" fill="currentColor" stroke="none"/><rect x="14" y="4" width="2" height="2" fill="currentColor" stroke="none"/><rect x="4" y="14" width="2" height="2" fill="currentColor" stroke="none"/><path d="M12 12h2v2M14 14v4h4M18 12h-4v2"/></svg>,
+  Hash:     (p) => <svg {...p} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><path d="M4 7h12M4 13h12M8 3l-1.5 14M13.5 3L12 17"/></svg>,
+};
+// Helper: give each icon a default className width/height
+Object.keys(Icon).forEach(k => {
+  const orig = Icon[k];
+  Icon[k] = ({ size = 18, ...rest }) => orig({ width: size, height: size, ...rest });
+});
+
+// ═══════════════════════════════════════════════════════════
+// § PRIMITIVE COMPONENTS
+// ═══════════════════════════════════════════════════════════
+
+// — Button
+const Btn = memo(({ children, variant = "primary", size = "md", className = "", disabled, onClick, ...rest }) => {
+  const base = "inline-flex items-center justify-center gap-2 font-semibold rounded-xl transition-all duration-150 active:scale-95 disabled:opacity-40 disabled:pointer-events-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-jade-400 cursor-pointer border-0";
+  const variants = {
+    primary:   "bg-jade-gradient text-white shadow-jade hover:shadow-jade-lg",
+    secondary: "bg-glass text-jade-700 border border-white/70 shadow-sm hover:bg-white/80",
+    ghost:     "bg-transparent text-slate-600 hover:bg-slate-100",
+    danger:    "bg-rose-50 text-rose-600 border border-rose-200 hover:bg-rose-100",
+    warning:   "bg-amber-gradient text-amber-900 shadow-amber",
+    outline:   "bg-transparent text-jade-600 border border-jade-300 hover:bg-jade-50",
+  };
+  const sizes = {
+    xs: "text-xs px-3 py-1.5 gap-1.5",
+    sm: "text-sm px-4 py-2",
+    md: "text-sm px-5 py-2.5",
+    lg: "text-base px-7 py-3.5",
+    xl: "text-base px-8 py-4 w-full",
+  };
+  return (
+    <motion.button
+      className={`${base} ${variants[variant]} ${sizes[size]} ${className}`}
+      disabled={disabled}
+      onClick={onClick}
+      whileHover={disabled ? {} : { scale: 1.02, y: -1 }}
+      whileTap={disabled ? {} : { scale: 0.96 }}
+      transition={{ type: "spring", stiffness: 500, damping: 25 }}
+      {...rest}
+    >{children}</motion.button>
+  );
+});
+
+// — Card
+const Card = memo(({ children, className = "", glow, onClick, ...rest }) => (
+  <motion.div
+    className={`glass-card ${glow ? "glow-jade" : ""} ${onClick ? "cursor-pointer" : ""} ${className}`}
+    onClick={onClick}
+    whileHover={onClick ? { y: -3, boxShadow: "0 16px 48px rgba(28,122,28,0.18), 0 4px 16px rgba(0,0,0,0.06), inset 0 1px 0 rgba(255,255,255,0.7)" } : {}}
+    transition={{ type: "spring", stiffness: 300, damping: 25 }}
+    {...rest}
+  >{children}</motion.div>
+));
+
+// — Badge
+const Badge = memo(({ children, color = "jade", dot = false }) => {
+  const colors = {
+    jade:   "bg-jade-100 text-jade-800 border-jade-200",
+    amber:  "bg-amber-100 text-amber-800 border-amber-200",
+    rose:   "bg-rose-100  text-rose-700  border-rose-200",
+    blue:   "bg-blue-100  text-blue-700  border-blue-200",
+    slate:  "bg-slate-100 text-slate-600 border-slate-200",
+  };
+  const dots = {
+    jade: "bg-jade-500",  amber: "bg-amber-500",
+    rose: "bg-rose-500",  blue:  "bg-blue-500", slate: "bg-slate-400",
+  };
+  return (
+    <span className={`inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full border ${colors[color]}`}>
+      {dot && <span className={`w-1.5 h-1.5 rounded-full ${dots[color]}`} />}
+      {children}
+    </span>
+  );
+});
+
+// — Input field
+const Field = memo(({ label, children, hint }) => (
+  <div className="mb-4">
+    {label && <label className="block text-xs font-bold text-slate-500 uppercase tracking-widest mb-2">{label}</label>}
+    {children}
+    {hint && <p className="mt-1.5 text-xs text-slate-400">{hint}</p>}
+  </div>
+));
+
+const Input = memo(({ ...props }) => (
+  <input
+    className="w-full bg-white/60 border border-white/80 rounded-xl px-4 py-3 text-sm text-slate-800 placeholder-slate-400 font-medium focus:outline-none focus:border-jade-400/60 focus:bg-white/90 focus:ring-2 focus:ring-jade-400/20 transition-all duration-200"
+    {...props}
+  />
+));
+
+const Select = memo(({ children, ...props }) => (
+  <select
+    className="w-full bg-white/60 border border-white/80 rounded-xl px-4 py-3 pr-10 text-sm text-slate-800 font-medium focus:outline-none focus:border-jade-400/60 focus:ring-2 focus:ring-jade-400/20 transition-all duration-200 appearance-none cursor-pointer"
+    style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%23475569' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E")`, backgroundRepeat: "no-repeat", backgroundPosition: "right 14px center" }}
+    {...props}
+  >{children}</select>
+));
+
+// — Section header
+const SectionHead = memo(({ title, count, action }) => (
+  <div className="flex items-center justify-between mb-3">
+    <span className="text-xs font-extrabold text-slate-500 uppercase tracking-widest">{title}</span>
+    <div className="flex items-center gap-2">
+      {count != null && (
+        <motion.span
+          key={count}
+          initial={{ scale: 1.4, opacity: 0 }}
+          animate={{ scale: 1, opacity: 1 }}
+          transition={{ type: "spring", stiffness: 500, damping: 28 }}
+          className="text-xs font-bold text-jade-700 bg-jade-100 border border-jade-200 px-2.5 py-0.5 rounded-full"
+        >{count}</motion.span>
+      )}
+      {action}
+    </div>
+  </div>
+));
+
+// — Avatar
+const Avatar = memo(({ name, size = "md", color = "jade" }) => {
+  const initials = name.split(" ").map(w => w[0]).join("").slice(0, 2).toUpperCase();
+  const sizes = { sm: "w-8 h-8 text-xs", md: "w-11 h-11 text-sm", lg: "w-14 h-14 text-base" };
+  const colors = { jade: "from-jade-400 to-jade-600 text-white", amber: "from-amber-400 to-amber-600 text-white", blue: "from-blue-400 to-blue-600 text-white" };
+  return (
+    <div className={`${sizes[size]} bg-gradient-to-br ${colors[color]} rounded-2xl flex items-center justify-center font-bold flex-shrink-0 shadow-inner`}>
+      {initials}
+    </div>
+  );
+});
+
+// — Smart tip
+const Tip = memo(({ text }) => (
+  <motion.div
+    variants={anim.fadeUp} initial="initial" animate="animate"
+    className="flex items-start gap-2.5 mt-3 p-3 bg-jade-50/60 border border-jade-200/60 rounded-xl backdrop-blur-sm"
+  >
+    <Icon.Info size={14} className="text-jade-600 flex-shrink-0 mt-0.5" />
+    <p className="text-xs text-slate-600 leading-relaxed">{text}</p>
+  </motion.div>
+));
+
+// — Empty state
+const Empty = memo(({ icon: IconComp, title, subtitle }) => (
+  <motion.div
+    variants={anim.fadeUp} initial="initial" animate="animate"
+    className="flex flex-col items-center justify-center py-14 text-center"
+  >
+    <div className="w-16 h-16 bg-white/70 border border-white/80 rounded-2xl flex items-center justify-center mb-4 shadow-sm">
+      <IconComp size={24} className="text-slate-400" />
+    </div>
+    <p className="text-sm font-semibold text-slate-500">{title}</p>
+    {subtitle && <p className="text-xs text-slate-400 mt-1 max-w-xs">{subtitle}</p>}
+  </motion.div>
+));
+
+// — Shimmer skeleton
+const Skeleton = ({ h = 44, rounded = "rounded-xl" }) => (
+  <div
+    className={`${rounded} ${h === "full" ? "w-full" : ""} animate-pulse bg-gradient-to-r from-slate-200/60 via-white/80 to-slate-200/60 bg-[length:400%_100%]`}
+    style={{ height: h === "full" ? "100%" : h }}
+  />
+);
+
+// — Toast stack
+const ToastStack = memo(({ toasts }) => {
+  const icons = { success: <Icon.Check size={14} />, error: <Icon.X size={14} />, info: <Icon.Info size={14} /> };
+  const colors = {
+    success: "from-jade-700 to-jade-600 border-jade-500/30",
+    error:   "from-rose-700 to-rose-600 border-rose-500/30",
+    info:    "from-blue-700 to-blue-600 border-blue-500/30",
+  };
+  return (
+    <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex flex-col gap-2 pointer-events-none">
+      <AnimatePresence>
+        {toasts.map(t => (
+          <motion.div
+            key={t.id}
+            initial={{ opacity: 0, y: 16, scale: 0.88 }}
+            animate={{ opacity: 1, y: 0,  scale: 1,   transition: { type: "spring", stiffness: 500, damping: 30 } }}
+            exit={{    opacity: 0, y: -8, scale: 0.94, transition: { duration: 0.2 } }}
+            className={`flex items-center gap-2.5 text-white text-xs font-bold px-5 py-3 rounded-full shadow-xl border bg-gradient-to-r whitespace-nowrap backdrop-blur-md ${colors[t.type]}`}
+          >
+            {icons[t.type]}
+            {t.msg}
+          </motion.div>
+        ))}
+      </AnimatePresence>
+    </div>
+  );
+});
+
+// ═══════════════════════════════════════════════════════════
+// § LAYOUT COMPONENTS
+// ═══════════════════════════════════════════════════════════
+
+// Background blobs
+const BgCanvas = () => (
+  <div className="fixed inset-0 z-0 overflow-hidden pointer-events-none" aria-hidden>
+    <div className="bg-blob bg-blob-1" />
+    <div className="bg-blob bg-blob-2" />
+    <div className="bg-blob bg-blob-3" />
+    <div className="bg-blob bg-blob-4" />
+    <div className="bg-mesh" />
+  </div>
+);
+
+// Sidebar (desktop admin)
+const ADMIN_NAV = [
+  { page: "admin-dash",      icon: Icon.Grid,      label: "Dashboard" },
+  { page: "track-customer",  icon: Icon.Users,      label: "Live Queue" },
+  { page: "generate-form",   icon: Icon.Clipboard,  label: "Form Builder" },
+  { page: "add-coordinator", icon: Icon.UserPlus,   label: "Team" },
+];
+const CLIENT_NAV = [
+  { page: "client-dash", icon: Icon.Target,  label: "My Spot" },
+  { page: "client-form", icon: Icon.PenLine, label: "Join Queue" },
+];
+
+const Sidebar = memo(() => {
+  const { user, page, nav, logout } = useApp();
+  return (
+    <aside className="sidebar">
+      <div className="sidebar-brand">
+        <motion.div whileHover={{ rotate: 8, scale: 1.08 }} transition={{ type: "spring", stiffness: 400, damping: 18 }} className="brand-icon">
+          <Icon.Leaf size={22} />
+        </motion.div>
+        <div>
+          <div className="brand-name">Q · Eliminator</div>
+          <div className="brand-sub">Queue Management</div>
+        </div>
+      </div>
+
+      <nav className="sidebar-nav">
+        <div className="sidebar-section-label">Main</div>
+        {ADMIN_NAV.map((item, i) => {
+          const active = page === item.page;
+          return (
+            <motion.button
+              key={item.page}
+              className={`sidebar-item ${active ? "sidebar-item-active" : ""}`}
+              onClick={() => nav(item.page)}
+              initial={{ opacity: 0, x: -12 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ delay: i * 0.05, duration: 0.26 }}
+              whileHover={{ x: 2 }}
+              whileTap={{ scale: 0.98 }}
+            >
+              <div className={`sidebar-icon ${active ? "sidebar-icon-active" : ""}`}>
+                <item.icon size={16} />
+              </div>
+              <span>{item.label}</span>
+              {active && <motion.div layoutId="sidebar-pill" className="sidebar-active-pill" transition={{ type: "spring", stiffness: 400, damping: 30 }} />}
+            </motion.button>
+          );
+        })}
+      </nav>
+
+      <div className="sidebar-footer">
+        <div className="sidebar-user">
+          <div className="w-7 h-7 bg-jade-200 rounded-lg flex items-center justify-center text-xs font-bold text-jade-700">
+            {(user?.email || "A").charAt(0).toUpperCase()}
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="text-xs font-semibold text-slate-700 truncate">{user?.email || "admin@app.com"}</div>
+            <div className="text-xs text-slate-400 capitalize">{user?.role}</div>
+          </div>
+        </div>
+        <Btn variant="ghost" size="sm" onClick={logout} className="w-full mt-2 text-rose-500 hover:bg-rose-50 hover:text-rose-600 gap-2">
+          <Icon.LogOut size={14} /> Sign out
+        </Btn>
+      </div>
+    </aside>
+  );
+});
+
+// Mobile nav bar
+const BottomNav = memo(({ tabs }) => {
+  const { page, nav } = useApp();
+  return (
+    <motion.nav
+      className="bottom-bar"
+      initial={{ y: 80, opacity: 0 }}
+      animate={{ y: 0,  opacity: 1 }}
+      transition={{ duration: 0.4, delay: 0.15, ease: [0.22, 1, 0.36, 1] }}
+    >
+      {tabs.map(item => {
+        const active = page === item.page;
+        return (
+          <motion.button
+            key={item.page}
+            className={`bnav-btn ${active ? "bnav-active" : ""}`}
+            onClick={() => nav(item.page)}
+            whileTap={{ scale: 0.85 }}
+          >
+            <motion.div
+              className={`bnav-icon ${active ? "bnav-icon-active" : ""}`}
+              animate={active ? { scale: 1.1 } : { scale: 1 }}
+              transition={{ type: "spring", stiffness: 400, damping: 22 }}
+            >
+              <item.icon size={18} />
+              {active && (
+                <motion.div layoutId="nav-dot" className="bnav-dot"
+                  transition={{ type: "spring", stiffness: 500, damping: 30 }} />
+              )}
+            </motion.div>
+            <span className="bnav-label">{item.label}</span>
+          </motion.button>
+        );
+      })}
+    </motion.nav>
+  );
+});
+
+// Topbar (mobile)
+const Topbar = memo(({ title }) => {
+  const { logout } = useApp();
+  return (
+    <motion.header
+      className="topbar"
+      initial={{ y: -56, opacity: 0 }}
+      animate={{ y: 0, opacity: 1 }}
+      transition={{ duration: 0.38, ease: [0.22, 1, 0.36, 1] }}
+    >
+      <div className="topbar-brand">
+        <motion.div className="brand-icon brand-icon-sm" whileHover={{ rotate: 10 }}>
+          <Icon.Leaf size={16} />
+        </motion.div>
+        <span className="topbar-title">Q · Eliminator</span>
+      </div>
+      <div className="flex items-center gap-2">
+        {title && <span className="text-xs font-semibold text-slate-500 hidden sm:block">{title}</span>}
+        <Btn variant="ghost" size="xs" onClick={logout} className="text-slate-500 p-2">
+          <Icon.LogOut size={15} />
+        </Btn>
+      </div>
+    </motion.header>
+  );
+});
+
+// ═══════════════════════════════════════════════════════════
+// § PAGE: AUTH
+// ═══════════════════════════════════════════════════════════
+const AuthPage = () => {
+  const { login } = useApp();
+  const [mode,  setMode]  = useState("login");
+  const [email, setEmail] = useState("");
+  const [pw,    setPw]    = useState("");
+  const [role,  setRole]  = useState("admin");
+  const [org,   setOrg]   = useState("hospital");
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = () => {
+    setLoading(true);
+    setTimeout(() => { setLoading(false); login(email || "demo@app.com", role); }, 900);
+  };
+
+  return (
+    <div className="auth-wrap">
+      <BgCanvas />
+      <div className="auth-inner">
+        {/* Logo mark */}
+        <motion.div
+          initial={{ scale: 0.8, opacity: 0, y: -20 }}
+          animate={{ scale: 1,   opacity: 1, y: 0 }}
+          transition={{ duration: 0.5, ease: [0.34, 1.4, 0.64, 1] }}
+          className="auth-logo-wrap"
+        >
+          <div className="auth-logo">
+            <Icon.Leaf size={28} />
+          </div>
+          <div>
+            <h1 className="auth-app-name">Queue Eliminator</h1>
+            <p className="auth-tagline">Zero wait. Full control.</p>
+          </div>
+        </motion.div>
+
+        <motion.div
+          initial={{ opacity: 0, y: 24 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.4, delay: 0.15 }}
+          className="auth-card"
+        >
+          {/* Role selector */}
+          <div className="role-tabs">
+            {[["admin", "Admin"], ["coordinator", "Coordinator"], ["client", "Client"]].map(([v, l]) => (
+              <motion.button
+                key={v}
+                className={`role-tab ${role === v ? "role-tab-active" : ""}`}
+                onClick={() => setRole(v)}
+                whileTap={{ scale: 0.95 }}
+              >{l}</motion.button>
+            ))}
+          </div>
+
+          <Field label="Email address">
+            <Input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="you@example.com" />
+          </Field>
+          <Field label="Password">
+            <Input type="password" value={pw} onChange={e => setPw(e.target.value)} placeholder="••••••••" />
+          </Field>
+
+          <AnimatePresence mode="popLayout">
+            {mode === "signup" && (
+              <motion.div
+                key="org"
+                initial={{ opacity: 0, height: 0, marginBottom: 0 }}
+                animate={{ opacity: 1, height: "auto", marginBottom: 16 }}
+                exit={{    opacity: 0, height: 0, marginBottom: 0 }}
+                transition={{ duration: 0.24 }}
+              >
+                <Field label="Organisation">
+                  <Select value={org} onChange={e => setOrg(e.target.value)}>
+                    {["Hospital", "Bank", "Government", "Clinic", "Other"].map(o => (
+                      <option key={o} value={o.toLowerCase()}>{o}</option>
+                    ))}
+                  </Select>
+                </Field>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          <Btn variant="primary" size="xl" onClick={handleSubmit} disabled={loading}>
+            {loading ? (
+              <motion.div animate={{ rotate: 360 }} transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
+                className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full" />
+            ) : <>{mode === "login" ? "Sign In" : "Create Account"} <Icon.ChevronR size={15} /></>}
+          </Btn>
+
+          <div className="flex items-center gap-3 my-4">
+            <div className="flex-1 h-px bg-slate-200" />
+            <span className="text-xs text-slate-400 font-medium">or</span>
+            <div className="flex-1 h-px bg-slate-200" />
+          </div>
+
+          <Btn variant="secondary" size="xl" onClick={handleSubmit}>
+            <Icon.Google size={16} /> Continue with Google
+          </Btn>
+
+          <p className="text-center text-xs text-slate-500 mt-5">
+            {mode === "login" ? "Don't have an account? " : "Already have an account? "}
+            <button className="text-jade-600 font-bold hover:underline bg-none border-none cursor-pointer p-0"
+              onClick={() => setMode(mode === "login" ? "signup" : "login")}>
+              {mode === "login" ? "Sign up" : "Sign in"}
+            </button>
+          </p>
+        </motion.div>
+      </div>
+    </div>
+  );
+};
+
+// ═══════════════════════════════════════════════════════════
+// § PAGE: ADMIN DASHBOARD
+// ═══════════════════════════════════════════════════════════
+const StatCard = memo(({ label, value, color = "default", sub, icon: IconComp }) => {
+  const prev = usePrevious(value);
+  const colors = {
+    default: "bg-white/60",
+    jade:    "bg-jade-gradient-soft",
+    amber:   "bg-amber-50/80",
+    rose:    "bg-rose-50/80",
+    blue:    "bg-blue-50/80",
+  };
+  const textColors = { default: "text-slate-800", jade: "text-jade-700", amber: "text-amber-700", rose: "text-rose-600", blue: "text-blue-600" };
+  return (
+    <motion.div
+      className={`${colors[color]} border border-white/70 rounded-2xl p-5 shadow-sm backdrop-blur-md`}
+      variants={anim.cardItem}
+      whileHover={{ y: -4, boxShadow: "0 12px 32px rgba(0,0,0,0.10)", transition: { type: "spring", stiffness: 400, damping: 22 } }}
+    >
+      <div className="flex items-start justify-between mb-2">
+        <span className="text-xs font-extrabold text-slate-400 uppercase tracking-widest">{label}</span>
+        {IconComp && <div className={`${textColors[color]} opacity-60`}><IconComp size={16} /></div>}
+      </div>
+      <motion.div
+        key={value}
+        initial={prev !== undefined ? { y: -12, opacity: 0 } : false}
+        animate={{ y: 0, opacity: 1 }}
+        transition={{ type: "spring", stiffness: 400, damping: 25 }}
+        className={`text-4xl font-black tracking-tight ${textColors[color]}`}
+      >{value}</motion.div>
+      {sub && <p className="text-xs text-slate-400 mt-1 font-medium">{sub}</p>}
+    </motion.div>
+  );
+});
+
+const AdminDash = () => {
+  const { stats, customers, nav } = useApp();
+  const waiting   = customers.filter(c => c.status === "Waiting").length;
+  const completed = customers.filter(c => c.status === "Completed").length;
+
+  const quickActions = [
+    { page: "track-customer",  icon: Icon.Users,      color: "text-jade-600",  bg: "bg-jade-100/80",   title: "Live Queue",      sub: `${waiting} waiting now`,    badge: waiting > 0 ? waiting : null },
+    { page: "generate-form",   icon: Icon.Clipboard,  color: "text-blue-600",  bg: "bg-blue-100/80",   title: "Form Builder",    sub: "Build intake forms"          },
+    { page: "add-coordinator", icon: Icon.UserPlus,   color: "text-amber-600", bg: "bg-amber-100/80",  title: "Team",            sub: "Manage coordinators"         },
+  ];
+
+  return (
+    <motion.div {...anim.page}>
+      {/* Hero banner */}
+      <motion.div variants={anim.fadeUp} initial="initial" animate="animate" className="hero-banner mb-6">
+        <div className="hero-content">
+          <div className="text-white/70 text-xs font-bold uppercase tracking-widest mb-1">Good morning 👋</div>
+          <h1 className="text-2xl font-black text-white tracking-tight mb-1">Queue Control Center</h1>
+          <p className="text-white/70 text-sm">Real-time view. Total control. No chaos.</p>
+        </div>
+        <div className="hero-orb" />
+        <div className="hero-orb hero-orb-2" />
+      </motion.div>
+
+      {/* Stats */}
+      <motion.div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6" variants={anim.stagger} initial="initial" animate="animate">
+        <StatCard label="Total Today" value={stats.total}  color="default" icon={Icon.Hash} />
+        <StatCard label="Waiting"     value={waiting}      color="jade"    icon={Icon.Clock} sub="Live count" />
+        <StatCard label="Completed"   value={completed}    color="default" icon={Icon.Check} />
+        <StatCard label="Missed"      value={stats.missed} color="rose"    icon={Icon.X}     sub="Action needed" />
+      </motion.div>
+
+      {/* Quick actions */}
+      <div className="mb-4">
+        <SectionHead title="Quick Actions" />
+        <motion.div className="grid grid-cols-1 md:grid-cols-3 gap-3" variants={anim.stagger} initial="initial" animate="animate">
+          {quickActions.map(a => (
+            <Card key={a.page} onClick={() => nav(a.page)} className="p-4" variants={anim.cardItem}>
+              <div className="flex items-center gap-3">
+                <div className={`w-11 h-11 rounded-xl ${a.bg} ${a.color} flex items-center justify-center flex-shrink-0`}>
+                  <a.icon size={20} />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="font-bold text-sm text-slate-800">{a.title}</div>
+                  <div className="text-xs text-slate-400 mt-0.5">{a.sub}</div>
+                </div>
+                <div className="flex items-center gap-2">
+                  {a.badge && <Badge color="jade" dot>{a.badge}</Badge>}
+                  <Icon.ChevronR size={14} className="text-slate-400" />
+                </div>
+              </div>
+            </Card>
+          ))}
+        </motion.div>
+      </div>
+
+      <Tip text="Tip: Peak hours? Keep an extra counter ready. Avg wait time today: 8 min." />
+    </motion.div>
+  );
+};
+
+// ═══════════════════════════════════════════════════════════
+// § PAGE: TRACK CUSTOMERS
+// ═══════════════════════════════════════════════════════════
+const CustomerCard = memo(({ customer, isFirst, onRemove }) => {
+  const initials = customer.name.split(" ").map(w => w[0]).join("").slice(0, 2);
+  return (
+    <motion.div
+      layout
+      variants={anim.cardItem}
+      initial="initial"
+      animate="animate"
+      exit={anim.cardItem.exit}
+      className={`customer-card ${isFirst ? "customer-card-active" : ""}`}
+      whileHover={{ y: -2, transition: { duration: 0.18 } }}
+    >
+      <div className={`w-11 h-11 rounded-2xl flex items-center justify-center text-sm font-black flex-shrink-0 ${isFirst ? "bg-jade-200 text-jade-800" : "bg-slate-100 text-slate-600"}`}>
+        {initials}
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="text-sm font-bold text-slate-800 truncate">{customer.name}</div>
+        <div className="flex items-center gap-2 mt-0.5">
+          <span className="text-xs font-bold text-jade-600 bg-jade-100 border border-jade-200 px-2 py-0.5 rounded-md font-mono">{customer.token}</span>
+          <span className="text-xs text-slate-400">{customer.time}</span>
+        </div>
+      </div>
+      <div className="flex flex-col items-end gap-1.5 flex-shrink-0">
+        {isFirst
+          ? <motion.span animate={{ opacity: [0.5, 1, 0.5] }} transition={{ duration: 2, repeat: Infinity }} className="text-xs font-extrabold text-jade-600 uppercase tracking-wider">Serving ✦</motion.span>
+          : null
+        }
+        <Btn variant="danger" size="xs" onClick={() => onRemove(customer.id)}>
+          <Icon.X size={11} />
+        </Btn>
+      </div>
+    </motion.div>
+  );
+});
+
+const TrackCustomer = () => {
+  const { customers, nextCustomer, skipCustomer, removeCustomer } = useApp();
+  const { isDesktop } = useBreakpoint();
+  const [toasts, showToast] = useToast();
+
+  const waiting   = customers.filter(c => c.status === "Waiting");
+  const completed = customers.filter(c => c.status === "Completed");
+
+  const handleNext = () => { nextCustomer(); showToast("Customer called successfully ✓", "success"); };
+  const handleSkip = () => { skipCustomer(); showToast("Customer moved to next position", "info"); };
+
+  return (
+    <motion.div {...anim.page}>
+      <ToastStack toasts={toasts} />
+
+      {!isDesktop && (
+        <div className="mb-5">
+          <h1 className="text-2xl font-black text-slate-800 tracking-tight">Live Queue</h1>
+          <p className="text-sm text-slate-500 mt-0.5">Serve faster. Stay organised.</p>
+        </div>
+      )}
+
+      <div className={isDesktop ? "grid grid-cols-[1fr_280px] gap-6 items-start" : ""}>
+        {/* Main queue */}
+        <div>
+          <div className="flex gap-2 mb-5">
+            <Btn variant="primary" size="md" onClick={handleNext} disabled={waiting.length === 0}>
+              <Icon.Play size={14} /> Call Next
+            </Btn>
+            <Btn variant="warning" size="md" onClick={handleSkip} disabled={waiting.length < 2}>
+              <Icon.Skip size={14} /> Skip
+            </Btn>
+          </div>
+
+          <SectionHead title="In Queue" count={waiting.length} />
+          {waiting.length === 0
+            ? <Empty icon={Icon.Check} title="Queue is empty" subtitle="Customers will appear once they join" />
+            : (
+              <AnimatePresence>
+                {waiting.map((c, i) => (
+                  <CustomerCard key={c.id} customer={c} isFirst={i === 0} onRemove={removeCustomer} />
+                ))}
+              </AnimatePresence>
+            )
+          }
+
+          {completed.length > 0 && (
+            <div className="mt-6">
+              <SectionHead title="Completed" count={completed.length} />
+              <AnimatePresence>
+                {completed.map(c => (
+                  <motion.div key={c.id} className="customer-card opacity-70" variants={anim.cardItem} initial="initial" animate="animate">
+                    <div className="w-11 h-11 rounded-2xl bg-jade-100 text-jade-700 flex items-center justify-center text-sm font-bold flex-shrink-0">
+                      {c.name.split(" ").map(w => w[0]).join("").slice(0, 2)}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-semibold text-slate-700 truncate">{c.name}</div>
+                      <div className="text-xs text-slate-400 font-mono">{c.token}</div>
+                    </div>
+                    <Badge color="jade" dot>Served</Badge>
+                  </motion.div>
+                ))}
+              </AnimatePresence>
+            </div>
+          )}
+        </div>
+
+        {/* Stats sidebar */}
+        {isDesktop && (
+          <div className="space-y-3">
+            <Card className="p-4 sticky top-4">
+              <div className="text-xs font-extrabold text-slate-400 uppercase tracking-widest mb-4">Live Stats</div>
+              <div className="grid grid-cols-2 gap-3">
+                {[
+                  { val: waiting.length,   label: "Waiting",   color: "text-jade-600",  bg: "bg-jade-50" },
+                  { val: completed.length, label: "Served",    color: "text-slate-600", bg: "bg-slate-50" },
+                ].map(s => (
+                  <div key={s.label} className={`${s.bg} rounded-xl p-3 text-center border border-white/60`}>
+                    <motion.div
+                      key={s.val}
+                      initial={{ scale: 1.3, opacity: 0 }}
+                      animate={{ scale: 1, opacity: 1 }}
+                      className={`text-3xl font-black ${s.color}`}
+                    >{s.val}</motion.div>
+                    <div className="text-xs text-slate-400 font-bold mt-1 uppercase tracking-wide">{s.label}</div>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-4 pt-4 border-t border-slate-100">
+                <div className="flex items-center justify-between text-xs text-slate-500 mb-1.5">
+                  <span>Completion rate</span>
+                  <span className="font-bold text-jade-600">{waiting.length + completed.length > 0 ? Math.round(completed.length / (waiting.length + completed.length) * 100) : 0}%</span>
+                </div>
+                <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                  <motion.div
+                    className="h-full bg-jade-gradient rounded-full"
+                    initial={{ width: 0 }}
+                    animate={{ width: `${waiting.length + completed.length > 0 ? Math.round(completed.length / (waiting.length + completed.length) * 100) : 0}%` }}
+                    transition={{ duration: 0.8, ease: "easeOut" }}
+                  />
+                </div>
+              </div>
+            </Card>
+            <Tip text="Follow the order or make quick decisions when needed." />
+          </div>
+        )}
+      </div>
+    </motion.div>
+  );
+};
+
+// ═══════════════════════════════════════════════════════════
+// § PAGE: FORM BUILDER
+// ═══════════════════════════════════════════════════════════
+const GenerateForm = () => {
+  const { fields, addField, removeField } = useApp();
+  const { isDesktop } = useBreakpoint();
+  const [type,  setType]  = useState("input");
+  const [title, setTitle] = useState("");
+  const [ph,    setPh]    = useState("");
+  const [opts,  setOpts]  = useState("");
+  const [toasts, showToast] = useToast();
+
+  const handleAdd = () => {
+    if (!title.trim()) return;
+    addField({ type, title, placeholder: ph, options: opts.split(",").map(o => o.trim()).filter(Boolean) });
+    setTitle(""); setPh(""); setOpts("");
+    showToast("Field added!", "success");
+  };
+
+  const typeColors = { input: "blue", checkbox: "jade", menu: "amber" };
+  const typeIcons  = { input: Icon.PenLine, checkbox: Icon.Check, menu: Icon.Hash };
+
+  return (
+    <motion.div {...anim.page}>
+      <ToastStack toasts={toasts} />
+
+      {!isDesktop && (
+        <div className="mb-5">
+          <h1 className="text-2xl font-black text-slate-800 tracking-tight">Form Builder</h1>
+          <p className="text-sm text-slate-500 mt-0.5">Create your intake form in seconds.</p>
+        </div>
+      )}
+
+      <div className={isDesktop ? "grid grid-cols-[360px_1fr] gap-6 items-start" : ""}>
+        {/* Builder panel */}
+        <Card className={`p-5 ${isDesktop ? "sticky top-4" : "mb-4"}`}>
+          <div className="text-xs font-extrabold text-slate-400 uppercase tracking-widest mb-4">Add Field</div>
+
+          <Field label="Field type">
+            <Select value={type} onChange={e => setType(e.target.value)}>
+              <option value="input">Text Input</option>
+              <option value="checkbox">Checkbox Group</option>
+              <option value="menu">Dropdown Menu</option>
+            </Select>
+          </Field>
+
+          <Field label="Label">
+            <Input value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g. Full Name" />
+          </Field>
+
+          <AnimatePresence mode="popLayout">
+            {type === "input" && (
+              <motion.div key="ph" initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} transition={{ duration: 0.2 }}>
+                <Field label="Placeholder text">
+                  <Input value={ph} onChange={e => setPh(e.target.value)} placeholder="e.g. Enter your name" />
+                </Field>
+              </motion.div>
+            )}
+            {(type === "checkbox" || type === "menu") && (
+              <motion.div key="opts" initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} transition={{ duration: 0.2 }}>
+                <Field label="Options (comma separated)">
+                  <Input value={opts} onChange={e => setOpts(e.target.value)} placeholder="Option A, Option B, Option C" />
+                </Field>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          <Btn variant="primary" size="xl" onClick={handleAdd} disabled={!title.trim()}>
+            <Icon.Plus size={15} /> Add Field
+          </Btn>
+          <Tip text="Keep forms short for faster entries. Less is more." />
+        </Card>
+
+        {/* Preview panel */}
+        <div>
+          <SectionHead title="Form Preview" count={fields.length} />
+          {fields.length === 0
+            ? <Empty icon={Icon.Clipboard} title="No fields yet" subtitle="Add your first field from the builder panel" />
+            : (
+              <>
+                <AnimatePresence>
+                  {fields.map(f => {
+                    const TypeIcon = typeIcons[f.type];
+                    return (
+                      <motion.div
+                        key={f.id}
+                        className="field-chip"
+                        variants={anim.cardItem}
+                        initial="initial"
+                        animate="animate"
+                        exit={anim.cardItem.exit}
+                        whileHover={{ x: 3, transition: { duration: 0.15 } }}
+                        layout
+                      >
+                        <div className={`w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 ${f.type === "input" ? "bg-blue-100 text-blue-600" : f.type === "checkbox" ? "bg-jade-100 text-jade-600" : "bg-amber-100 text-amber-600"}`}>
+                          <TypeIcon size={15} />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm font-bold text-slate-800">{f.title}</div>
+                          {f.options?.length > 0 && (
+                            <div className="text-xs text-slate-400 truncate mt-0.5">{f.options.join(" · ")}</div>
+                          )}
+                        </div>
+                        <Badge color={typeColors[f.type]}>{f.type}</Badge>
+                        <Btn variant="danger" size="xs" onClick={() => removeField(f.id)}>
+                          <Icon.X size={11} />
+                        </Btn>
+                      </motion.div>
+                    );
+                  })}
+                </AnimatePresence>
+                <div className="mt-5 flex gap-2">
+                  <Btn variant="primary" size="md" onClick={() => showToast("Form published! QR code ready.", "success")}>
+                    <Icon.QR size={15} /> Generate QR
+                  </Btn>
+                  <Btn variant="outline" size="md" onClick={() => showToast("Form published!", "success")}>
+                    <Icon.Bolt size={14} /> Publish
+                  </Btn>
+                </div>
+              </>
+            )
+          }
+        </div>
+      </div>
+    </motion.div>
+  );
+};
+
+// ═══════════════════════════════════════════════════════════
+// § PAGE: ADD COORDINATOR
+// ═══════════════════════════════════════════════════════════
+const AddCoordinator = () => {
+  const { coords, addCoord, removeCoord } = useApp();
+  const { isDesktop } = useBreakpoint();
+  const [email, setEmail] = useState("");
+  const [name,  setName]  = useState("");
+  const [role,  setRole]  = useState("Doctor");
+  const [toasts, showToast] = useToast();
+
+  const handleAdd = () => {
+    if (!email.trim()) return;
+    addCoord({ email, name, role });
+    setEmail(""); setName(""); setRole("Doctor");
+    showToast("Coordinator added!", "success");
+  };
+
+  return (
+    <motion.div {...anim.page}>
+      <ToastStack toasts={toasts} />
+
+      {!isDesktop && (
+        <div className="mb-5">
+          <h1 className="text-2xl font-black text-slate-800 tracking-tight">Team</h1>
+          <p className="text-sm text-slate-500 mt-0.5">Manage your queue coordinators.</p>
+        </div>
+      )}
+
+      <div className={isDesktop ? "grid grid-cols-[340px_1fr] gap-6 items-start" : ""}>
+        <Card className={`p-5 ${isDesktop ? "sticky top-4" : "mb-4"}`}>
+          <div className="text-xs font-extrabold text-slate-400 uppercase tracking-widest mb-4">Add Member</div>
+          <Field label="Full name">
+            <Input value={name} onChange={e => setName(e.target.value)} placeholder="Dr. Suresh Kumar" />
+          </Field>
+          <Field label="Email address">
+            <Input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="name@hospital.com"
+              onKeyDown={e => e.key === "Enter" && handleAdd()} />
+          </Field>
+          <Field label="Role">
+            <Select value={role} onChange={e => setRole(e.target.value)}>
+              {["Doctor", "Nurse", "Coordinator", "Receptionist", "Admin"].map(r => (
+                <option key={r}>{r}</option>
+              ))}
+            </Select>
+          </Field>
+          <Btn variant="primary" size="xl" onClick={handleAdd} disabled={!email.trim()}>
+            <Icon.Plus size={15} /> Add to Team
+          </Btn>
+          <Tip text="Coordinators can call, skip and manage the queue from any device." />
+        </Card>
+
+        <div>
+          <SectionHead title="Active Team" count={coords.length} />
+          {coords.length === 0
+            ? <Empty icon={Icon.Users} title="No team members yet" subtitle="Add coordinators to help manage the queue" />
+            : (
+              <AnimatePresence>
+                {coords.map(c => (
+                  <motion.div
+                    key={c.id}
+                    className="customer-card"
+                    variants={anim.slideRight}
+                    initial="initial"
+                    animate="animate"
+                    exit={anim.slideRight.exit}
+                    layout
+                    whileHover={{ y: -2 }}
+                  >
+                    <Avatar name={c.name} size="md" />
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-bold text-slate-800">{c.name}</div>
+                      <div className="text-xs text-slate-400 truncate">{c.email}</div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Badge color="jade">{c.role}</Badge>
+                      <Btn variant="danger" size="xs" onClick={() => removeCoord(c.id)}>
+                        <Icon.X size={11} />
+                      </Btn>
+                    </div>
+                  </motion.div>
+                ))}
+              </AnimatePresence>
+            )
+          }
+        </div>
+      </div>
+    </motion.div>
+  );
+};
+
+// ═══════════════════════════════════════════════════════════
+// § PAGE: CLIENT FORM
+// ═══════════════════════════════════════════════════════════
+const ClientForm = () => {
+  const { fields, nav } = useApp();
+  const [vals,  setVals]  = useState({});
+  const [toasts, showToast] = useToast();
+
+  const displayFields = fields.length > 0 ? fields : [
+    { id: "df1", type: "input",    title: "Full Name",        placeholder: "Enter your full name" },
+    { id: "df2", type: "menu",     title: "Purpose of Visit", options: ["Consultation", "Follow-up", "Emergency", "Routine checkup"] },
+    { id: "df3", type: "checkbox", title: "Preferred Time",   options: ["Morning (9–12)", "Afternoon (12–4)", "Evening (4–7)"] },
+  ];
+
+  const handleSubmit = () => {
+    showToast("Token confirmed! Joining queue…", "success");
+    setTimeout(() => nav("client-dash"), 1600);
+  };
+
+  return (
+    <motion.div {...anim.page}>
+      <ToastStack toasts={toasts} />
+      <h1 className="text-2xl font-black text-slate-800 tracking-tight mb-1">Join the Queue</h1>
+      <p className="text-sm text-slate-500 mb-5">Fill once. Relax while you wait.</p>
+
+      <Card className="p-5 mb-3">
+        <motion.div variants={anim.stagger} initial="initial" animate="animate">
+          {displayFields.map(f => (
+            <motion.div key={f.id} variants={anim.fadeUp} className="mb-5 last:mb-0">
+              <label className="block text-xs font-extrabold text-slate-500 uppercase tracking-widest mb-2">{f.title}</label>
+              {f.type === "input" && (
+                <Input placeholder={f.placeholder || ""} value={vals[f.id] || ""} onChange={e => setVals({ ...vals, [f.id]: e.target.value })} />
+              )}
+              {f.type === "menu" && (
+                <Select value={vals[f.id] || ""} onChange={e => setVals({ ...vals, [f.id]: e.target.value })}>
+                  <option value="">Select an option</option>
+                  {f.options?.map(o => <option key={o}>{o}</option>)}
+                </Select>
+              )}
+              {f.type === "checkbox" && (
+                <div className="space-y-2">
+                  {f.options?.map(o => {
+                    const checked = !!vals[`${f.id}-${o}`];
+                    return (
+                      <motion.div
+                        key={o}
+                        onClick={() => setVals({ ...vals, [`${f.id}-${o}`]: !checked })}
+                        animate={{ borderColor: checked ? "rgba(28,122,28,0.35)" : "rgba(255,255,255,0.8)" }}
+                        whileTap={{ scale: 0.98 }}
+                        className="flex items-center gap-3 p-3.5 bg-white/60 rounded-xl border cursor-pointer select-none backdrop-blur-sm"
+                        style={{ borderColor: checked ? "rgba(28,122,28,0.35)" : "rgba(203,213,225,0.5)", background: checked ? "rgba(240,250,240,0.7)" : "rgba(255,255,255,0.6)" }}
+                      >
+                        <motion.div
+                          animate={{ background: checked ? "#1e7d1e" : "rgba(255,255,255,0.9)", scale: checked ? [1, 1.2, 1] : 1 }}
+                          transition={{ duration: 0.18 }}
+                          className="w-5 h-5 rounded-md border-2 flex items-center justify-center flex-shrink-0"
+                          style={{ borderColor: checked ? "#1e7d1e" : "#cbd5e1" }}
+                        >
+                          <AnimatePresence>
+                            {checked && (
+                              <motion.div key="c" initial={{ scale: 0, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0 }} transition={{ type: "spring", stiffness: 500, damping: 25 }}>
+                                <Icon.Check size={11} className="text-white" style={{ strokeWidth: 3 }} />
+                              </motion.div>
+                            )}
+                          </AnimatePresence>
+                        </motion.div>
+                        <span className="text-sm font-medium text-slate-700">{o}</span>
+                      </motion.div>
+                    );
+                  })}
+                </div>
+              )}
+            </motion.div>
+          ))}
+        </motion.div>
+      </Card>
+
+      <Tip text="Double-check details to avoid delays. You'll get a token number after submitting." />
+
+      <div className="flex gap-2 mt-4">
+        <Btn variant="primary" size="lg" className="flex-1" onClick={handleSubmit}>
+          Get Token <Icon.ChevronR size={15} />
+        </Btn>
+        <Btn variant="secondary" size="lg" onClick={() => nav("client-dash")}>
+          Cancel
+        </Btn>
+      </div>
+    </motion.div>
+  );
+};
+
+// ═══════════════════════════════════════════════════════════
+// § PAGE: CLIENT DASHBOARD
+// ═══════════════════════════════════════════════════════════
+const ClientDash = () => {
+  const { clientData } = useApp();
+  const [refreshed, setRefreshed] = useState(false);
+
+  const pulse = () => {
+    setRefreshed(true);
+    setTimeout(() => setRefreshed(false), 1200);
+  };
+
+  return (
+    <motion.div {...anim.page}>
+      <div className="flex items-start justify-between mb-5">
+        <div>
+          <h1 className="text-2xl font-black text-slate-800 tracking-tight">Your Status</h1>
+          <p className="text-sm text-slate-500 mt-0.5">Live updates. No guessing.</p>
+        </div>
+        <Btn variant="secondary" size="sm" onClick={pulse}>
+          <motion.div animate={refreshed ? { rotate: 360 } : { rotate: 0 }} transition={{ duration: 0.6 }}>
+            <Icon.Sparkles size={14} />
+          </motion.div>
+          Refresh
+        </Btn>
+      </div>
+
+      {/* Position hero */}
+      <motion.div
+        variants={anim.scaleIn} initial="initial" animate="animate"
+        className="relative overflow-hidden bg-jade-gradient rounded-3xl p-8 text-center mb-4 shadow-jade-lg"
+      >
+        <div className="absolute inset-0 pointer-events-none">
+          <div className="absolute -top-8 -right-8 w-32 h-32 bg-white/10 rounded-full" />
+          <div className="absolute -bottom-4 -left-4 w-20 h-20 bg-white/10 rounded-full" />
+        </div>
+        <div className="relative z-10">
+          <div className="text-white/60 text-xs font-bold uppercase tracking-widest mb-2">Position in queue</div>
+          <motion.div
+            className="text-8xl font-black text-white leading-none tracking-tighter"
+            initial={{ scale: 0.5, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            transition={{ delay: 0.15, type: "spring", stiffness: 250, damping: 20 }}
+          >{clientData.position}</motion.div>
+          <div className="text-white/70 text-sm font-medium mt-2">people ahead of you</div>
+          <motion.div
+            animate={{ opacity: [0.5, 1, 0.5], scale: [0.98, 1.02, 0.98] }}
+            transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
+            className="inline-block mt-4"
+          >
+            <Badge color="jade">
+              <span className="w-2 h-2 rounded-full bg-jade-500 animate-pulse" />
+              Waiting
+            </Badge>
+          </motion.div>
+        </div>
+      </motion.div>
+
+      {/* Info cards */}
+      <div className="grid grid-cols-2 gap-3 mb-4">
+        <Card className="p-4">
+          <div className="text-xs font-extrabold text-slate-400 uppercase tracking-widest mb-2">Your Token</div>
+          <motion.span
+            initial={{ opacity: 0, scale: 0.85 }}
+            animate={{ opacity: 1, scale: 1 }}
+            transition={{ delay: 0.2, type: "spring", stiffness: 300 }}
+            className="text-2xl font-black text-jade-600 font-mono"
+          >{clientData.token}</motion.span>
+        </Card>
+        <Card className="p-4">
+          <div className="text-xs font-extrabold text-slate-400 uppercase tracking-widest mb-2">Est. Wait</div>
+          <div className="flex items-end gap-1">
+            <span className="text-4xl font-black text-amber-600">{clientData.estimatedWait}</span>
+            <span className="text-sm text-slate-400 mb-1.5 font-medium">min</span>
+          </div>
+        </Card>
+      </div>
+
+      {/* Advisory */}
+      <Card className="p-4 border-jade-200/60 bg-jade-50/40">
+        <div className="flex items-center gap-2 text-jade-700 font-bold text-sm mb-2">
+          <Icon.Bell size={15} /> Wait Smart. Move only when it's your turn.
+        </div>
+        <p className="text-xs text-slate-500 leading-relaxed">We'll update your position in real-time. Stay nearby once you're in the top 3.</p>
+        <Tip text="Stay within range once you're close ⚡" />
+      </Card>
+    </motion.div>
+  );
+};
+
+// ═══════════════════════════════════════════════════════════
+// § SHELL — routing + layout
+// ═══════════════════════════════════════════════════════════
+const PAGE_TITLES = {
+  "admin-dash":      "Dashboard",
+  "track-customer":  "Live Queue",
+  "generate-form":   "Form Builder",
+  "add-coordinator": "Team",
+  "client-dash":     "My Spot",
+  "client-form":     "Join Queue",
+};
+
+const PAGES = {
+  "admin-dash":      <AdminDash />,
+  "track-customer":  <TrackCustomer />,
+  "generate-form":   <GenerateForm />,
+  "add-coordinator": <AddCoordinator />,
+  "client-dash":     <ClientDash />,
+  "client-form":     <ClientForm />,
+};
+
+const Shell = () => {
+  const { user, page } = useApp();
+  const { isDesktop } = useBreakpoint();
+  if (!user) return <AuthPage />;
+
+  const isAdmin = user.role !== "client";
+  const tabs    = isAdmin ? ADMIN_NAV : CLIENT_NAV;
+
+  if (isAdmin && isDesktop) {
+    return (
+      <div className="desktop-shell">
+        <BgCanvas />
+        <Sidebar />
+        <div className="desktop-main">
+          <div className="desktop-topbar">
+            <h2 className="text-xl font-extrabold text-slate-800 tracking-tight">{PAGE_TITLES[page]}</h2>
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2 bg-white/70 border border-white/80 rounded-full px-4 py-2 shadow-sm">
+                <div className="w-2 h-2 rounded-full bg-jade-500 shadow-jade-dot" />
+                <span className="text-xs font-semibold text-slate-600">{user.email}</span>
+              </div>
+            </div>
+          </div>
+          <div className="desktop-content">
+            <AnimatePresence mode="wait">
+              <motion.div key={page} {...anim.page}>{PAGES[page]}</motion.div>
+            </AnimatePresence>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mobile-shell">
+      <BgCanvas />
+      <Topbar title={PAGE_TITLES[page]} />
+      <div className="mobile-content">
+        <AnimatePresence mode="wait">
+          <motion.div key={page} {...anim.page}>{PAGES[page]}</motion.div>
+        </AnimatePresence>
+      </div>
+      <BottomNav tabs={tabs} />
+    </div>
+  );
+};
+
+// ═══════════════════════════════════════════════════════════
+// § GLOBAL STYLES
+// ═══════════════════════════════════════════════════════════
+const CSS = `
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@500;700&display=swap');
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --jade-50:  #f0faf0; --jade-100: #dcf5dc; --jade-200: #b8ecb8;
+  --jade-300: #82da82; --jade-400: #4ec94e; --jade-500: #28a428;
+  --jade-600: #1e7d1e; --jade-700: #175c17; --jade-800: #114011;
+  --font: 'Inter', -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+}
+
+html, body, #root { height: 100%; }
+body {
+  font-family: var(--font);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow-x: hidden;
+  background: #e8f5e8;
+}
+
+/* ── Tailwind-compatible utility classes ── */
+.flex         { display: flex; }
+.inline-flex  { display: inline-flex; }
+.grid         { display: grid; }
+.block        { display: block; }
+.hidden       { display: none; }
+.items-start  { align-items: flex-start; }
+.items-center { align-items: center; }
+.items-end    { align-items: flex-end; }
+.items-baseline { align-items: baseline; }
+.justify-center { justify-content: center; }
+.justify-between { justify-content: space-between; }
+.justify-end  { justify-content: flex-end; }
+.flex-1       { flex: 1 1 0%; }
+.flex-col     { flex-direction: column; }
+.flex-shrink-0 { flex-shrink: 0; }
+.relative     { position: relative; }
+.absolute     { position: absolute; }
+.fixed        { position: fixed; }
+.sticky       { position: sticky; }
+.inset-0      { inset: 0; }
+.z-10         { z-index: 10; }
+.z-50         { z-index: 50; }
+.overflow-hidden { overflow: hidden; }
+.overflow-x-hidden { overflow-x: hidden; }
+.truncate     { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.whitespace-nowrap { white-space: nowrap; }
+.select-none  { user-select: none; -webkit-user-select: none; }
+.cursor-pointer { cursor: pointer; }
+.pointer-events-none { pointer-events: none; }
+.w-full       { width: 100%; }
+.h-full       { height: 100%; }
+.min-w-0      { min-width: 0; }
+.w-2          { width: 0.5rem; } .h-2 { height: 0.5rem; }
+.w-5          { width: 1.25rem; } .h-5 { height: 1.25rem; }
+.w-7          { width: 1.75rem; } .h-7 { height: 1.75rem; }
+.w-8          { width: 2rem; } .h-8 { height: 2rem; }
+.w-9          { width: 2.25rem; } .h-9 { height: 2.25rem; }
+.w-11         { width: 2.75rem; } .h-11 { height: 2.75rem; }
+.w-14         { width: 3.5rem; } .h-14 { height: 3.5rem; }
+.w-16         { width: 4rem; } .h-16 { height: 4rem; }
+.w-20         { width: 5rem; } .h-20 { height: 5rem; }
+.w-32         { width: 8rem; } .h-32 { height: 8rem; }
+.h-px         { height: 1px; }
+.h-2          { height: 0.5rem; }
+.text-xs      { font-size: 0.75rem; line-height: 1rem; }
+.text-sm      { font-size: 0.875rem; line-height: 1.25rem; }
+.text-base    { font-size: 1rem; line-height: 1.5rem; }
+.text-2xl     { font-size: 1.5rem; line-height: 2rem; }
+.text-3xl     { font-size: 1.875rem; line-height: 2.25rem; }
+.text-4xl     { font-size: 2.25rem; line-height: 2.5rem; }
+.text-8xl     { font-size: 6rem; line-height: 1; }
+.text-xl      { font-size: 1.25rem; line-height: 1.75rem; }
+.font-medium  { font-weight: 500; }
+.font-semibold { font-weight: 600; }
+.font-bold    { font-weight: 700; }
+.font-extrabold { font-weight: 800; }
+.font-black   { font-weight: 900; }
+.font-mono    { font-family: var(--font-mono); }
+.tracking-tight { letter-spacing: -0.025em; }
+.tracking-tighter { letter-spacing: -0.05em; }
+.tracking-widest { letter-spacing: 0.1em; }
+.tracking-wide  { letter-spacing: 0.05em; }
+.uppercase    { text-transform: uppercase; }
+.leading-none { line-height: 1; }
+.leading-relaxed { line-height: 1.625; }
+.text-center  { text-align: center; }
+.text-right   { text-align: right; }
+.text-white   { color: #fff; }
+.text-slate-400 { color: #94a3b8; }
+.text-slate-500 { color: #64748b; }
+.text-slate-600 { color: #475569; }
+.text-slate-700 { color: #334155; }
+.text-slate-800 { color: #1e293b; }
+.text-jade-600  { color: var(--jade-600); }
+.text-jade-700  { color: var(--jade-700); }
+.text-jade-800  { color: var(--jade-800); }
+.text-amber-600 { color: #d97706; }
+.text-amber-700 { color: #b45309; }
+.text-amber-800 { color: #92400e; }
+.text-amber-900 { color: #78350f; }
+.text-rose-500  { color: #f43f5e; }
+.text-rose-600  { color: #e11d48; }
+.text-rose-700  { color: #be123c; }
+.text-blue-600  { color: #2563eb; }
+.text-blue-700  { color: #1d4ed8; }
+.text-green-600 { color: #16a34a; }
+.bg-white\/60   { background: rgba(255,255,255,0.60); }
+.bg-white\/70   { background: rgba(255,255,255,0.70); }
+.bg-white\/80   { background: rgba(255,255,255,0.80); }
+.bg-white\/90   { background: rgba(255,255,255,0.90); }
+.bg-transparent { background: transparent; }
+.bg-jade-50     { background: var(--jade-50); }
+.bg-jade-100    { background: var(--jade-100); }
+.bg-jade-200    { background: var(--jade-200); }
+.bg-jade-gradient { background: linear-gradient(135deg, #28a428 0%, #175c17 100%); }
+.bg-jade-gradient-soft { background: linear-gradient(135deg,rgba(40,164,40,0.12),rgba(23,92,23,0.07)); }
+.bg-amber-50\/80 { background: rgba(255,251,235,0.8); }
+.bg-amber-100\/80 { background: rgba(254,243,199,0.8); }
+.bg-amber-100    { background: #fef3c7; }
+.bg-rose-50      { background: #fff1f2; }
+.bg-rose-100     { background: #ffe4e6; }
+.bg-rose-50\/80  { background: rgba(255,241,242,0.8); }
+.bg-blue-50      { background: #eff6ff; }
+.bg-blue-100     { background: #dbeafe; }
+.bg-blue-100\/80 { background: rgba(219,234,254,0.8); }
+.bg-slate-100    { background: #f1f5f9; }
+.bg-slate-200    { background: #e2e8f0; }
+.bg-slate-50     { background: #f8fafc; }
+.bg-amber-gradient { background: linear-gradient(135deg, #f59e0b, #d97706); }
+.border       { border-width: 1px; border-style: solid; }
+.border-0     { border: 0; }
+.border-t     { border-top-width: 1px; border-top-style: solid; }
+.border-2     { border-width: 2px; border-style: solid; }
+.border-white\/70 { border-color: rgba(255,255,255,0.7); }
+.border-white\/80 { border-color: rgba(255,255,255,0.8); }
+.border-slate-100 { border-color: #f1f5f9; }
+.border-slate-200 { border-color: #e2e8f0; }
+.border-jade-200  { border-color: var(--jade-200); }
+.border-jade-200\/60 { border-color: rgba(184,236,184,0.6); }
+.border-jade-300  { border-color: var(--jade-300); }
+.border-rose-200  { border-color: #fecdd3; }
+.border-amber-200 { border-color: #fde68a; }
+.border-blue-200  { border-color: #bfdbfe; }
+.rounded-md   { border-radius: 0.375rem; }
+.rounded-lg   { border-radius: 0.5rem; }
+.rounded-xl   { border-radius: 0.75rem; }
+.rounded-2xl  { border-radius: 1rem; }
+.rounded-3xl  { border-radius: 1.5rem; }
+.rounded-full { border-radius: 9999px; }
+.shadow-sm    { box-shadow: 0 1px 2px 0 rgba(0,0,0,0.05); }
+.shadow-jade  { box-shadow: 0 6px 20px rgba(23,92,23,0.28), 0 2px 6px rgba(0,0,0,0.08); }
+.shadow-jade-lg { box-shadow: 0 16px 48px rgba(23,92,23,0.32), 0 4px 16px rgba(0,0,0,0.10); }
+.shadow-jade-dot { box-shadow: 0 0 6px rgba(40,164,40,0.6); }
+.shadow-amber { box-shadow: 0 6px 20px rgba(217,119,6,0.30); }
+.shadow-xl    { box-shadow: 0 20px 48px rgba(0,0,0,0.18), 0 8px 20px rgba(0,0,0,0.10); }
+.shadow-inner { box-shadow: inset 0 1px 0 rgba(255,255,255,0.5); }
+.backdrop-blur-sm { backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
+.backdrop-blur-md { backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); }
+.backdrop-blur-lg { backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px); }
+.opacity-60   { opacity: 0.6; }
+.opacity-70   { opacity: 0.7; }
+.transition-all { transition: all 0.15s ease; }
+.duration-150 { transition-duration: 0.15s; }
+.duration-200 { transition-duration: 0.20s; }
+.appearance-none { -webkit-appearance: none; appearance: none; }
+.pointer-events-none { pointer-events: none; }
+.animate-pulse { animation: pulse 2s cubic-bezier(0.4,0,0.6,1) infinite; }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
+.scale-95     { transform: scale(0.95); }
+.active\\:scale-95:active { transform: scale(0.95); }
+.disabled\\:opacity-40:disabled { opacity: 0.4; }
+.disabled\\:pointer-events-none:disabled { pointer-events: none; }
+.space-y-2 > * + * { margin-top: 0.5rem; }
+.space-y-3 > * + * { margin-top: 0.75rem; }
+.last\\:mb-0:last-child { margin-bottom: 0; }
+.gap-1   { gap: 0.25rem; }
+.gap-1\\.5 { gap: 0.375rem; }
+.gap-2   { gap: 0.5rem; }
+.gap-2\\.5 { gap: 0.625rem; }
+.gap-3   { gap: 0.75rem; }
+.gap-4   { gap: 1rem; }
+.gap-5   { gap: 1.25rem; }
+.gap-6   { gap: 1.5rem; }
+.p-3     { padding: 0.75rem; }
+.p-3\\.5 { padding: 0.875rem; }
+.p-4     { padding: 1rem; }
+.p-5     { padding: 1.25rem; }
+.p-8     { padding: 2rem; }
+.px-2    { padding-left: 0.5rem; padding-right: 0.5rem; }
+.px-2\\.5 { padding-left: 0.625rem; padding-right: 0.625rem; }
+.px-3    { padding-left: 0.75rem; padding-right: 0.75rem; }
+.px-4    { padding-left: 1rem; padding-right: 1rem; }
+.px-5    { padding-left: 1.25rem; padding-right: 1.25rem; }
+.px-7    { padding-left: 1.75rem; padding-right: 1.75rem; }
+.px-8    { padding-left: 2rem; padding-right: 2rem; }
+.py-0\\.5 { padding-top: 0.125rem; padding-bottom: 0.125rem; }
+.py-1    { padding-top: 0.25rem; padding-bottom: 0.25rem; }
+.py-1\\.5 { padding-top: 0.375rem; padding-bottom: 0.375rem; }
+.py-2    { padding-top: 0.5rem; padding-bottom: 0.5rem; }
+.py-2\\.5 { padding-top: 0.625rem; padding-bottom: 0.625rem; }
+.py-3    { padding-top: 0.75rem; padding-bottom: 0.75rem; }
+.py-3\\.5 { padding-top: 0.875rem; padding-bottom: 0.875rem; }
+.py-4    { padding-top: 1rem; padding-bottom: 1rem; }
+.pt-4    { padding-top: 1rem; }
+.pb-0    { padding-bottom: 0; }
+.mt-0\\.5 { margin-top: 0.125rem; }
+.mt-1    { margin-top: 0.25rem; }
+.mt-1\\.5 { margin-top: 0.375rem; }
+.mt-2    { margin-top: 0.5rem; }
+.mt-3    { margin-top: 0.75rem; }
+.mt-4    { margin-top: 1rem; }
+.mt-5    { margin-top: 1.25rem; }
+.mt-6    { margin-top: 1.5rem; }
+.mb-1    { margin-bottom: 0.25rem; }
+.mb-1\\.5 { margin-bottom: 0.375rem; }
+.mb-2    { margin-bottom: 0.5rem; }
+.mb-3    { margin-bottom: 0.75rem; }
+.mb-4    { margin-bottom: 1rem; }
+.mb-5    { margin-bottom: 1.25rem; }
+.mb-6    { margin-bottom: 1.5rem; }
+.grid-cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.grid-cols-1 { grid-template-columns: repeat(1, minmax(0, 1fr)); }
+.items-baseline { align-items: baseline; }
+.hover\\:bg-white\\/80:hover  { background: rgba(255,255,255,0.8); }
+.hover\\:bg-slate-100:hover   { background: #f1f5f9; }
+.hover\\:bg-rose-50:hover     { background: #fff1f2; }
+.hover\\:bg-jade-50:hover     { background: var(--jade-50); }
+.hover\\:bg-rose-100:hover    { background: #ffe4e6; }
+.hover\\:bg-amber-100:hover   { background: #fef3c7; }
+.hover\\:text-rose-600:hover  { color: #e11d48; }
+.hover\\:text-jade-600:hover  { color: var(--jade-600); }
+.hover\\:underline:hover      { text-decoration: underline; }
+.focus-visible\\:outline-2:focus-visible { outline-width: 2px; }
+.focus-visible\\:outline-offset-2:focus-visible { outline-offset: 2px; }
+.focus-visible\\:outline-jade-400:focus-visible { outline-color: var(--jade-400); }
+.max-w-xs { max-width: 20rem; }
+
+/* Gradient backgrounds */
+.from-jade-400  { --tw-gradient-from: var(--jade-400); }
+.from-jade-600  { --tw-gradient-from: var(--jade-600); }
+.from-jade-700  { --tw-gradient-from: var(--jade-700); }
+.from-amber-400 { --tw-gradient-from: #fbbf24; }
+.from-amber-600 { --tw-gradient-from: #d97706; }
+.from-blue-400  { --tw-gradient-from: #60a5fa; }
+.from-blue-600  { --tw-gradient-from: #2563eb; }
+.from-blue-700  { --tw-gradient-from: #1d4ed8; }
+.from-rose-600  { --tw-gradient-from: #e11d48; }
+.from-rose-700  { --tw-gradient-from: #be123c; }
+.to-jade-600    { --tw-gradient-to: var(--jade-600); }
+.to-jade-700    { --tw-gradient-to: var(--jade-700); }
+.to-amber-600   { --tw-gradient-to: #d97706; }
+.to-blue-600    { --tw-gradient-to: #2563eb; }
+.to-rose-600    { --tw-gradient-to: #e11d48; }
+.bg-gradient-to-br { background-image: linear-gradient(to bottom right, var(--tw-gradient-from), var(--tw-gradient-to)); }
+.bg-gradient-to-r  { background-image: linear-gradient(to right, var(--tw-gradient-from), var(--tw-gradient-to)); }
+
+/* ── Responsive breakpoints ── */
+@media (min-width: 640px) {
+  .sm\\:block { display: block; }
+  .grid-cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (min-width: 768px) {
+  .md\\:grid-cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (min-width: 1024px) {
+  .lg\\:grid-cols-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .grid-cols-\\[1fr_280px\\] { grid-template-columns: 1fr 280px; }
+  .grid-cols-\\[360px_1fr\\] { grid-template-columns: 360px 1fr; }
+  .grid-cols-\\[340px_1fr\\] { grid-template-columns: 340px 1fr; }
+  .top-4 { top: 1rem; }
+}
+
+/* ── Background blobs ── */
+.bg-canvas {
+  background: linear-gradient(145deg, #d4f5c4 0%, #e8fde0 30%, #c8f0e0 55%, #d8eefc 80%, #e0e8ff 100%);
+}
+.bg-blob {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(70px);
+  opacity: 0.55;
+  animation: blobFloat 14s ease-in-out infinite alternate;
+}
+.bg-blob-1 { width:420px;height:420px; background:radial-gradient(circle,#a8e68a,transparent 70%); top:-80px;left:-60px;animation-delay:0s }
+.bg-blob-2 { width:320px;height:320px; background:radial-gradient(circle,#b8f0d0,transparent 70%); top:25%;right:-40px;animation-delay:-3.5s }
+.bg-blob-3 { width:280px;height:280px; background:radial-gradient(circle,#c8e8ff,transparent 70%); bottom:5%;left:5%;animation-delay:-7s }
+.bg-blob-4 { width:220px;height:220px; background:radial-gradient(circle,#ffe8b0,transparent 70%); bottom:20%;right:5%;animation-delay:-10.5s }
+.bg-mesh   { position:absolute;inset:0;opacity:0.03;background-image:linear-gradient(rgba(0,0,0,0.1) 1px,transparent 1px),linear-gradient(90deg,rgba(0,0,0,0.1) 1px,transparent 1px);background-size:40px 40px }
+@keyframes blobFloat { from{transform:translate(0,0) scale(1)} to{transform:translate(22px,32px) scale(1.08)} }
+
+/* ── Glass card ── */
+.glass-card {
+  background: rgba(255,255,255,0.58);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  border: 1px solid rgba(255,255,255,0.72);
+  border-radius: 1.25rem;
+  padding: 1.125rem;
+  margin-bottom: 0.875rem;
+  box-shadow: 0 8px 32px rgba(23,92,23,0.10), 0 2px 8px rgba(0,0,0,0.04), inset 0 1px 0 rgba(255,255,255,0.65);
+}
+.glow-jade { box-shadow: 0 0 24px rgba(40,164,40,0.22), 0 8px 32px rgba(23,92,23,0.14), inset 0 1px 0 rgba(255,255,255,0.65); }
+
+/* ── Hero banner ── */
+.hero-banner {
+  background: linear-gradient(135deg, rgba(40,164,40,0.9) 0%, rgba(23,92,23,0.95) 100%);
+  border-radius: 1.5rem;
+  padding: 1.75rem;
+  position: relative;
+  overflow: hidden;
+  border: 1px solid rgba(255,255,255,0.18);
+  box-shadow: 0 16px 48px rgba(23,92,23,0.28), inset 0 1px 0 rgba(255,255,255,0.18);
+}
+.hero-content { position: relative; z-index: 1; }
+.hero-orb { position:absolute;width:180px;height:180px;background:radial-gradient(circle,rgba(255,255,255,0.12),transparent 70%);border-radius:50%;right:-40px;top:-40px;z-index:0 }
+.hero-orb-2 { width:100px;height:100px;bottom:-20px;right:60px;top:auto }
+
+/* ── Customer card ── */
+.customer-card {
+  display: flex;
+  align-items: center;
+  gap: 0.875rem;
+  padding: 0.875rem 1rem;
+  background: rgba(255,255,255,0.60);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid rgba(255,255,255,0.72);
+  border-radius: 1rem;
+  margin-bottom: 0.625rem;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.04), inset 0 1px 0 rgba(255,255,255,0.6);
+}
+.customer-card-active {
+  background: rgba(240,250,240,0.82);
+  border-color: rgba(40,164,40,0.32);
+  box-shadow: 0 8px 28px rgba(40,164,40,0.14), inset 0 1px 0 rgba(255,255,255,0.7);
+}
+
+/* ── Field chip ── */
+.field-chip {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.875rem 1rem;
+  background: rgba(255,255,255,0.55);
+  border: 1px solid rgba(255,255,255,0.72);
+  border-radius: 1rem;
+  margin-bottom: 0.625rem;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.04), inset 0 1px 0 rgba(255,255,255,0.6);
+}
+
+/* ── Auth screen ── */
+.auth-wrap {
+  min-height: 100dvh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  position: relative;
+  z-index: 1;
+}
+.auth-inner {
+  width: 100%;
+  max-width: 420px;
+}
+.auth-logo-wrap {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 2rem;
+}
+.auth-logo {
+  width: 52px; height: 52px;
+  background: linear-gradient(135deg, #28a428, #175c17);
+  border-radius: 16px;
+  display: flex; align-items: center; justify-content: center;
+  color: #fff;
+  flex-shrink: 0;
+  box-shadow: 0 8px 24px rgba(23,92,23,0.35);
+}
+.auth-app-name { font-size: 1.5rem; font-weight: 900; color: #175c17; letter-spacing: -0.03em; line-height: 1.2; }
+.auth-tagline  { font-size: 0.875rem; color: #64748b; margin-top: 2px; font-weight: 500; }
+.auth-card {
+  background: rgba(255,255,255,0.70);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid rgba(255,255,255,0.85);
+  border-radius: 1.75rem;
+  padding: 2rem;
+  box-shadow: 0 24px 64px rgba(23,92,23,0.14), 0 8px 24px rgba(0,0,0,0.08), inset 0 1px 0 rgba(255,255,255,0.8);
+}
+
+/* ── Role tabs ── */
+.role-tabs {
+  display: flex;
+  background: rgba(241,245,249,0.7);
+  border-radius: 0.875rem;
+  padding: 4px;
+  margin-bottom: 1.25rem;
+  border: 1px solid rgba(255,255,255,0.7);
+}
+.role-tab {
+  flex: 1;
+  font-family: var(--font);
+  font-size: 0.8125rem;
+  font-weight: 700;
+  padding: 8px 4px;
+  border-radius: 0.625rem;
+  border: none;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  color: #64748b;
+  background: transparent;
+  min-height: 36px;
+}
+.role-tab-active {
+  background: linear-gradient(135deg, #28a428, #175c17);
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(23,92,23,0.30);
+}
+
+/* ── Sidebar ── */
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  width: 240px;
+  flex-shrink: 0;
+  background: rgba(255,255,255,0.58);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border-right: 1px solid rgba(255,255,255,0.70);
+  height: 100vh;
+  position: sticky;
+  top: 0;
+  overflow-y: auto;
+  box-shadow: 4px 0 24px rgba(23,92,23,0.06);
+  z-index: 10;
+}
+.sidebar::-webkit-scrollbar { display: none; }
+.sidebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 24px 18px 20px;
+  border-bottom: 1px solid rgba(241,245,249,0.8);
+}
+.brand-icon {
+  width: 38px; height: 38px;
+  background: linear-gradient(135deg, #28a428, #175c17);
+  border-radius: 12px;
+  display: flex; align-items: center; justify-content: center;
+  color: #fff;
+  flex-shrink: 0;
+  box-shadow: 0 6px 16px rgba(23,92,23,0.30);
+}
+.brand-icon-sm { width: 30px; height: 30px; border-radius: 9px; }
+.brand-name { font-size: 0.9375rem; font-weight: 900; color: #175c17; letter-spacing: -0.02em; }
+.brand-sub  { font-size: 0.6875rem; color: #94a3b8; font-weight: 600; margin-top: 1px; }
+.sidebar-nav { flex: 1; padding: 12px 10px; display: flex; flex-direction: column; gap: 2px; }
+.sidebar-section-label { font-size: 0.625rem; font-weight: 800; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.12em; padding: 2px 10px 10px; }
+.sidebar-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 0.75rem;
+  cursor: pointer;
+  border: none;
+  background: none;
+  font-family: var(--font);
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: #475569;
+  text-align: left;
+  width: 100%;
+  transition: background 0.15s, color 0.15s;
+  position: relative;
+  overflow: hidden;
+}
+.sidebar-item:hover { background: rgba(255,255,255,0.7); color: var(--jade-700); }
+.sidebar-item-active { background: rgba(240,250,240,0.8); color: var(--jade-700); font-weight: 700; border: 1px solid rgba(40,164,40,0.18); }
+.sidebar-icon { width: 30px; height: 30px; border-radius: 8px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.sidebar-icon-active { background: rgba(40,164,40,0.14); }
+.sidebar-active-pill { position: absolute; left: 0; top: 50%; transform: translateY(-50%); width: 3px; height: 60%; background: var(--jade-500); border-radius: 0 3px 3px 0; }
+.sidebar-footer { padding: 14px 10px; border-top: 1px solid rgba(241,245,249,0.8); }
+.sidebar-user { display: flex; align-items: center; gap: 9px; padding: 0 4px; }
+
+/* ── Mobile shell ── */
+.mobile-shell {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  max-width: 430px;
+  margin: 0 auto;
+  overflow: hidden;
+}
+.topbar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  background: rgba(255,255,255,0.65);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border-bottom: 1px solid rgba(255,255,255,0.72);
+  box-shadow: 0 4px 20px rgba(23,92,23,0.08);
+  z-index: 10;
+}
+.topbar-brand { display: flex; align-items: center; gap: 9px; }
+.topbar-title { font-size: 0.9375rem; font-weight: 900; color: var(--jade-700); letter-spacing: -0.02em; }
+.mobile-content {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 18px 14px;
+  padding-bottom: calc(88px + 16px);
+  -webkit-overflow-scrolling: touch;
+}
+.mobile-content::-webkit-scrollbar { display: none; }
+.bottom-bar {
+  position: absolute;
+  bottom: 10px;
+  left: 10px;
+  right: 10px;
+  height: 64px;
+  background: rgba(255,255,255,0.72);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid rgba(255,255,255,0.80);
+  border-radius: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: space-around;
+  padding: 0 8px;
+  z-index: 20;
+  box-shadow: 0 8px 32px rgba(23,92,23,0.14), inset 0 1px 0 rgba(255,255,255,0.85);
+}
+.bnav-btn { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 6px 4px; cursor: pointer; border: none; background: none; border-radius: 14px; color: #94a3b8; font-family: var(--font); }
+.bnav-active { color: var(--jade-700); }
+.bnav-icon { width: 38px; height: 38px; border-radius: 12px; display: flex; align-items: center; justify-content: center; position: relative; }
+.bnav-icon-active { background: linear-gradient(135deg, rgba(40,164,40,0.18), rgba(23,92,23,0.12)); box-shadow: 0 4px 12px rgba(40,164,40,0.20); }
+.bnav-dot { position: absolute; bottom: -5px; left: 50%; transform: translateX(-50%); width: 4px; height: 4px; border-radius: 50%; background: var(--jade-500); box-shadow: 0 0 6px rgba(40,164,40,0.7); }
+.bnav-label { font-size: 10px; font-weight: 700; letter-spacing: 0.03em; }
+
+/* ── Desktop shell ── */
+.desktop-shell {
+  display: flex;
+  height: 100vh;
+  position: relative;
+  z-index: 1;
+  overflow: hidden;
+}
+.desktop-main { flex: 1; display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
+.desktop-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 40px;
+  height: 64px;
+  flex-shrink: 0;
+  background: rgba(255,255,255,0.58);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  border-bottom: 1px solid rgba(255,255,255,0.70);
+  box-shadow: 0 4px 16px rgba(23,92,23,0.05);
+}
+.desktop-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 36px 40px;
+}
+.desktop-content::-webkit-scrollbar { width: 4px; }
+.desktop-content::-webkit-scrollbar-track { background: transparent; }
+.desktop-content::-webkit-scrollbar-thumb { background: rgba(40,164,40,0.22); border-radius: 4px; }
+.items-baseline { align-items: baseline; }
+@media (max-width: 640px) {
+  .mobile-shell { max-width: 100%; }
+  .mobile-content { padding: 14px 12px; padding-bottom: calc(88px + 14px); }
+  .desktop-shell { display: none; }
+}
+@media (min-width: 640px) and (max-width: 1023px) {
+  .mobile-shell { max-width: 100%; }
+  .mobile-content { padding: 22px 24px; padding-bottom: calc(88px + 22px); }
+}
+`;
+
+// ═══════════════════════════════════════════════════════════
+// § ROOT EXPORT
+// ═══════════════════════════════════════════════════════════
+export default function App() {
+  return (
+    <>
+      <style>{CSS}</style>
+      <AppProvider>
+        <BgCanvas />
+        <Shell />
+      </AppProvider>
+    </>
+  );
+}
