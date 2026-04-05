@@ -1,0 +1,1658 @@
+import { useState, useContext, createContext, useCallback, useEffect, useRef, memo, useMemo } from "react";
+import { motion, AnimatePresence } from "framer-motion";
+
+// ═══════════════════════════════════════════════════════════
+// § DESIGN TOKENS — single source of truth
+// ═══════════════════════════════════════════════════════════
+const TOKEN = {
+  jade:    { 50:"#f0faf0", 100:"#dcf5dc", 200:"#b8ecb8", 300:"#82da82", 400:"#4ec94e", 500:"#28a428", 600:"#1e7d1e", 700:"#175c17", 800:"#114011", 900:"#0b290b" },
+  slate:   { 50:"#f8fafb", 100:"#f1f4f7", 200:"#e2e8ef", 300:"#c8d3de", 400:"#94a3b4", 500:"#637383", 600:"#445566", 700:"#334455", 800:"#1e2d3d", 900:"#111927" },
+  amber:   { 50:"#fffbeb", 100:"#fef3c7", 200:"#fde08a", 400:"#f59e0b", 600:"#d97706", 800:"#92400e" },
+  rose:    { 50:"#fff1f2", 100:"#ffe4e6", 400:"#fb7185", 600:"#e11d48", 800:"#9f1239" },
+  blue:    { 50:"#eff6ff", 100:"#dbeafe", 400:"#60a5fa", 600:"#2563eb", 800:"#1e3a8a" },
+  success: "#16a34a",
+  warning: "#d97706",
+  danger:  "#dc2626",
+  info:    "#2563eb",
+};
+
+// ═══════════════════════════════════════════════════════════
+// § ANIMATION PRESETS
+// ═══════════════════════════════════════════════════════════
+const anim = {
+  page: {
+    initial: { opacity: 0, y: 18, filter: "blur(4px)" },
+    animate: { opacity: 1, y: 0,  filter: "blur(0px)", transition: { duration: 0.38, ease: [0.22, 1, 0.36, 1] } },
+    exit:    { opacity: 0, y: -10, filter: "blur(2px)", transition: { duration: 0.22, ease: "easeIn" } },
+  },
+  stagger: { animate: { transition: { staggerChildren: 0.055 } } },
+  fadeUp: {
+    initial: { opacity: 0, y: 16 },
+    animate: { opacity: 1, y: 0,  transition: { duration: 0.32, ease: "easeOut" } },
+  },
+  scaleIn: {
+    initial: { opacity: 0, scale: 0.92 },
+    animate: { opacity: 1, scale: 1,   transition: { duration: 0.34, ease: [0.34, 1.4, 0.64, 1] } },
+  },
+  slideRight: {
+    initial: { opacity: 0, x: -14 },
+    animate: { opacity: 1, x: 0,  transition: { duration: 0.28, ease: "easeOut" } },
+    exit:    { opacity: 0, x: 20, scale: 0.96, transition: { duration: 0.2 } },
+  },
+  cardItem: {
+    initial: { opacity: 0, y: 12 },
+    animate: { opacity: 1, y: 0,  transition: { duration: 0.28, ease: "easeOut" } },
+    exit:    { opacity: 0, x: 36, scale: 0.95, transition: { duration: 0.2 } },
+  },
+};
+
+// ═══════════════════════════════════════════════════════════
+// § HOOKS
+// ═══════════════════════════════════════════════════════════
+const useBreakpoint = () => {
+  const get = () => {
+    const w = typeof window !== "undefined" ? window.innerWidth : 375;
+    return { isMobile: w < 640, isTablet: w >= 640 && w < 1024, isDesktop: w >= 1024 };
+  };
+  const [bp, setBp] = useState(get);
+  useEffect(() => {
+    const h = () => setBp(get());
+    window.addEventListener("resize", h);
+    return () => window.removeEventListener("resize", h);
+  }, []);
+  return bp;
+};
+
+const useToast = () => {
+  const [toasts, setToasts] = useState([]);
+  const show = useCallback((msg, type = "success", ms = 2800) => {
+    const id = Date.now();
+    setToasts(p => [...p, { id, msg, type }]);
+    setTimeout(() => setToasts(p => p.filter(t => t.id !== id)), ms);
+  }, []);
+  return [toasts, show];
+};
+
+const usePrevious = (val) => {
+  const ref = useRef();
+  useEffect(() => { ref.current = val; });
+  return ref.current;
+};
+
+// ═══════════════════════════════════════════════════════════
+// § CONTEXT
+// ═══════════════════════════════════════════════════════════
+const AppCtx = createContext(null);
+const useApp = () => useContext(AppCtx);
+
+const MOCK_CUSTOMERS = [
+  { id: 1, name: "Arjun Sharma",  token: "T-001", status: "Waiting",   time: "10:05 AM", phone: "+91 98765 43210" },
+  { id: 2, name: "Priya Patel",   token: "T-002", status: "Waiting",   time: "10:12 AM", phone: "+91 87654 32109" },
+  { id: 3, name: "Rahul Verma",   token: "T-003", status: "Waiting",   time: "10:18 AM", phone: "+91 76543 21098" },
+  { id: 4, name: "Sneha Gupta",   token: "T-004", status: "Waiting",   time: "10:25 AM", phone: "+91 65432 10987" },
+  { id: 5, name: "Aditya Joshi",  token: "T-005", status: "Completed", time: "09:50 AM", phone: "+91 54321 09876" },
+];
+const MOCK_COORDS = [
+  { id: 1, email: "suresh@hospital.com", name: "Dr. Suresh Kumar", role: "Senior Doctor" },
+  { id: 2, email: "pooja@hospital.com",  name: "Nurse Pooja Singh", role: "Head Nurse" },
+];
+const MOCK_CLIENT  = { name: "Kiran Mehta", token: "T-006", position: 3, estimatedWait: 15, status: "Waiting" };
+const MOCK_STATS   = { total: 34, waiting: 12, completed: 18, missed: 4, avgWait: 8 };
+
+const AppProvider = ({ children }) => {
+  const [user,      setUser]      = useState(null);
+  const [page,      setPage]      = useState("auth");
+  const [customers, setCustomers] = useState(MOCK_CUSTOMERS);
+  const [coords,    setCoords]    = useState(MOCK_COORDS);
+  const [fields,    setFields]    = useState([]);
+
+  const nav    = useCallback(p => setPage(p), []);
+  const login  = useCallback((email, role) => {
+    setUser({ email, role });
+    setPage(role === "client" ? "client-dash" : "admin-dash");
+  }, []);
+  const logout = useCallback(() => { setUser(null); setFields([]); setPage("auth"); }, []);
+
+  const nextCustomer   = useCallback(() => setCustomers(p => {
+    const w = p.find(c => c.status === "Waiting");
+    return w ? p.map(c => c.id === w.id ? { ...c, status: "Completed" } : c) : p;
+  }), []);
+  const skipCustomer   = useCallback(() => setCustomers(p => {
+    const i = p.findIndex(c => c.status === "Waiting");
+    if (i === -1 || i === p.length - 1) return p;
+    const u = [...p]; [u[i], u[i + 1]] = [u[i + 1], u[i]]; return u;
+  }), []);
+  const removeCustomer = useCallback(id => setCustomers(p => p.filter(c => c.id !== id)), []);
+  const addCoord       = useCallback(({ email, name, role }) =>
+    setCoords(p => [...p, { id: Date.now(), email, name: name || email.split("@")[0], role: role || "Coordinator" }]), []);
+  const removeCoord    = useCallback(id => setCoords(p => p.filter(c => c.id !== id)), []);
+  const addField       = useCallback(f => setFields(p => [...p, { ...f, id: Date.now() }]), []);
+  const removeField    = useCallback(id => setFields(p => p.filter(f => f.id !== id)), []);
+
+  const value = useMemo(() => ({
+    user, page, nav, login, logout,
+    customers, nextCustomer, skipCustomer, removeCustomer,
+    coords, addCoord, removeCoord,
+    fields, addField, removeField,
+    stats: MOCK_STATS, clientData: MOCK_CLIENT,
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [user, page, customers, coords, fields]);
+
+  return <AppCtx.Provider value={value}>{children}</AppCtx.Provider>;
+};
+
+// ═══════════════════════════════════════════════════════════
+// § ICON LIBRARY
+// ═══════════════════════════════════════════════════════════
+const IconBase = {
+  Grid:     (p) => <svg {...p} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="2" width="7" height="7" rx="1.5"/><rect x="11" y="2" width="7" height="7" rx="1.5"/><rect x="2" y="11" width="7" height="7" rx="1.5"/><rect x="11" y="11" width="7" height="7" rx="1.5"/></svg>,
+  Users:    (p) => <svg {...p} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="7.5" cy="6" r="3"/><path d="M1 18c0-3.5 2.5-5.5 6.5-5.5s6.5 2 6.5 5.5"/><path d="M13.5 4a3 3 0 010 6M17.5 18c0-3-1.8-4.8-4-5.4"/></svg>,
+  Clipboard:(p) => <svg {...p} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="3" width="12" height="15" rx="2"/><path d="M7 8h6M7 12h4.5M7.5 3V2h5v1"/></svg>,
+  UserPlus: (p) => <svg {...p} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="7.5" cy="6" r="3"/><path d="M1 18c0-3.5 2.5-5.5 6.5-5.5s6.5 2 6.5 5.5"/><path d="M15 9v6M12 12h6"/></svg>,
+  Target:   (p) => <svg {...p} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><circle cx="10" cy="10" r="8"/><circle cx="10" cy="10" r="4.5"/><circle cx="10" cy="10" r="1.5" fill="currentColor"/></svg>,
+  PenLine:  (p) => <svg {...p} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M13.5 2.5l4 4L6 18H2v-4L13.5 2.5z"/><path d="M1 19h18"/></svg>,
+  LogOut:   (p) => <svg {...p} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M7.5 17H3.5a1 1 0 01-1-1V4a1 1 0 011-1h4"/><path d="M13.5 13.5l3.5-3.5-3.5-3.5M17 10H8"/></svg>,
+  ChevronR: (p) => <svg {...p} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M7.5 5l5 5-5 5"/></svg>,
+  Play:     (p) => <svg {...p} viewBox="0 0 20 20" fill="currentColor"><path d="M5 3.5l12 6.5-12 6.5V3.5z"/></svg>,
+  Skip:     (p) => <svg {...p} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><path d="M4 5l7 5-7 5V5z" fill="currentColor" stroke="none"/><line x1="16" y1="5" x2="16" y2="15"/></svg>,
+  X:        (p) => <svg {...p} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M4 4l12 12M16 4L4 16"/></svg>,
+  Plus:     (p) => <svg {...p} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M10 3v14M3 10h14"/></svg>,
+  Bolt:     (p) => <svg {...p} viewBox="0 0 20 20" fill="currentColor"><path d="M11 2L4 11h6l-1 7 8-10h-6l1-6z"/></svg>,
+  Info:     (p) => <svg {...p} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><circle cx="10" cy="10" r="8"/><path d="M10 9v5"/><circle cx="10" cy="6.5" r="0.75" fill="currentColor" stroke="none"/></svg>,
+  Check:    (p) => <svg {...p} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M3 10l5 5 9-9"/></svg>,
+  Leaf:     (p) => <svg {...p} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M20 4C13 4 6 10 6 19c2.5-5 6-8.5 14-8.5V4z"/><path d="M6 19c1-2.5 3.5-5 7-6"/></svg>,
+  Google:   (p) => <svg {...p} viewBox="0 0 20 20" fill="none"><path d="M18.2 10.25c0-.5 0-1-.12-1.5H10v2.85h4.6c-.2 1.1-.88 2-1.86 2.65v2.2h3c1.65-1.55 2.46-3.8 2.46-6.2z" fill="#4285F4"/><path d="M10 19c2.3 0 4.22-.76 5.62-2.05l-3-2.2c-.76.5-1.73.8-2.62.8-2.22 0-4.1-1.5-4.77-3.5H2.14v2.27C3.53 17.15 6.56 19 10 19z" fill="#34A853"/><path d="M5.23 12.05A5.5 5.5 0 015 10.5c0-.54.1-1.06.23-1.55V6.68H2.14A8.99 8.99 0 001 10.5c0 1.45.35 2.82.95 4.02l3.28-2.47z" fill="#FBBC05"/><path d="M10 4.5c1.27 0 2.4.43 3.3 1.28l2.47-2.47C14.2 1.95 12.27 1 10 1 6.56 1 3.53 2.85 2.14 5.68L5.4 8.15C6.1 6.15 7.78 4.5 10 4.5z" fill="#EA4335"/></svg>,
+  Bell:     (p) => <svg {...p} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><path d="M10 2a6 6 0 00-6 6c0 3.5-1.5 5-1.5 5h15S16 11.5 16 8a6 6 0 00-6-6z"/><path d="M11.7 16a1.7 1.7 0 01-3.4 0"/></svg>,
+  Clock:    (p) => <svg {...p} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><circle cx="10" cy="10" r="8"/><path d="M10 6v4l2.5 2.5"/></svg>,
+  Sparkles: (p) => <svg {...p} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M10 2v2M10 16v2M2 10h2M16 10h2M4.5 4.5l1.5 1.5M14 14l1.5 1.5M14 4.5L12.5 6M6 14l-1.5 1.5M10 7a3 3 0 100 6 3 3 0 000-6z"/></svg>,
+  QR:       (p) => <svg {...p} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="2" width="6" height="6" rx="1"/><rect x="12" y="2" width="6" height="6" rx="1"/><rect x="2" y="12" width="6" height="6" rx="1"/><rect x="4" y="4" width="2" height="2" fill="currentColor" stroke="none"/><rect x="14" y="4" width="2" height="2" fill="currentColor" stroke="none"/><rect x="4" y="14" width="2" height="2" fill="currentColor" stroke="none"/><path d="M12 12h2v2M14 14v4h4M18 12h-4v2"/></svg>,
+  Hash:     (p) => <svg {...p} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><path d="M4 7h12M4 13h12M8 3l-1.5 14M13.5 3L12 17"/></svg>,
+};
+
+// Wrap each icon to inject default size
+const Icon = {};
+Object.keys(IconBase).forEach(k => {
+  const Orig = IconBase[k];
+  Icon[k] = ({ size = 18, ...rest }) => <Orig width={size} height={size} {...rest} />;
+});
+
+// ═══════════════════════════════════════════════════════════
+// § PRIMITIVE COMPONENTS
+// ═══════════════════════════════════════════════════════════
+
+// — Button
+// FIX: Replaced motion.button (which had conflicts with HTML button attrs) with a motion.div styled as a button
+const Btn = memo(({ children, variant = "primary", size = "md", className = "", disabled, onClick, ...rest }) => {
+  const base = "inline-flex items-center justify-center gap-2 font-semibold rounded-xl transition-all duration-150 cursor-pointer select-none";
+  const variants = {
+    primary:   "bg-jade-gradient text-white shadow-jade",
+    secondary: "bg-glass text-jade-700 border border-white-70 shadow-sm",
+    ghost:     "bg-transparent text-slate-600",
+    danger:    "bg-rose-50 text-rose-600 border border-rose-200",
+    warning:   "bg-amber-gradient text-amber-900 shadow-amber",
+    outline:   "bg-transparent text-jade-600 border border-jade-300",
+  };
+  const sizes = {
+    xs: "text-xs px-3 py-1-5 gap-1-5",
+    sm: "text-sm px-4 py-2",
+    md: "text-sm px-5 py-2-5",
+    lg: "text-base px-7 py-3-5",
+    xl: "text-base px-8 py-4 w-full",
+  };
+
+  const sizeStyles = {
+    xs: { fontSize: "0.75rem", padding: "0.375rem 0.75rem", gap: "0.375rem" },
+    sm: { fontSize: "0.875rem", padding: "0.5rem 1rem" },
+    md: { fontSize: "0.875rem", padding: "0.625rem 1.25rem" },
+    lg: { fontSize: "1rem", padding: "0.875rem 1.75rem" },
+    xl: { fontSize: "1rem", padding: "1rem 2rem", width: "100%" },
+  };
+
+  const variantStyles = {
+    primary:   { background: "linear-gradient(135deg, #28a428, #175c17)", color: "#fff", boxShadow: "0 6px 20px rgba(23,92,23,0.28)" },
+    secondary: { background: "rgba(255,255,255,0.7)", color: "#1e7d1e", border: "1px solid rgba(255,255,255,0.7)", boxShadow: "0 1px 2px rgba(0,0,0,0.05)" },
+    ghost:     { background: "transparent", color: "#475569" },
+    danger:    { background: "#fff1f2", color: "#e11d48", border: "1px solid #fecdd3" },
+    warning:   { background: "linear-gradient(135deg, #f59e0b, #d97706)", color: "#78350f" },
+    outline:   { background: "transparent", color: "#1e7d1e", border: "1px solid #82da82" },
+  };
+
+  return (
+    <motion.button
+      style={{
+        ...sizeStyles[size],
+        ...variantStyles[variant],
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: "0.5rem",
+        fontWeight: 600,
+        borderRadius: "0.75rem",
+        fontFamily: "inherit",
+        cursor: disabled ? "not-allowed" : "pointer",
+        opacity: disabled ? 0.4 : 1,
+        border: variantStyles[variant].border || "none",
+        pointerEvents: disabled ? "none" : "auto",
+        transition: "all 0.15s ease",
+        outline: "none",
+      }}
+      className={className}
+      disabled={disabled}
+      onClick={onClick}
+      whileHover={disabled ? {} : { scale: 1.02, y: -1 }}
+      whileTap={disabled ? {} : { scale: 0.96 }}
+      transition={{ type: "spring", stiffness: 500, damping: 25 }}
+      {...rest}
+    >{children}</motion.button>
+  );
+});
+
+// — Card
+const Card = memo(({ children, className = "", glow, onClick, style, ...rest }) => (
+  <motion.div
+    style={{
+      background: "rgba(255,255,255,0.58)",
+      backdropFilter: "blur(18px)",
+      WebkitBackdropFilter: "blur(18px)",
+      border: "1px solid rgba(255,255,255,0.72)",
+      borderRadius: "1.25rem",
+      padding: "1.125rem",
+      marginBottom: "0.875rem",
+      boxShadow: glow
+        ? "0 0 24px rgba(40,164,40,0.22), 0 8px 32px rgba(23,92,23,0.14), inset 0 1px 0 rgba(255,255,255,0.65)"
+        : "0 8px 32px rgba(23,92,23,0.10), 0 2px 8px rgba(0,0,0,0.04), inset 0 1px 0 rgba(255,255,255,0.65)",
+      cursor: onClick ? "pointer" : "default",
+      ...style,
+    }}
+    className={className}
+    onClick={onClick}
+    whileHover={onClick ? { y: -3, boxShadow: "0 16px 48px rgba(28,122,28,0.18), 0 4px 16px rgba(0,0,0,0.06), inset 0 1px 0 rgba(255,255,255,0.7)" } : {}}
+    transition={{ type: "spring", stiffness: 300, damping: 25 }}
+    {...rest}
+  >{children}</motion.div>
+));
+
+// — Badge
+const Badge = memo(({ children, color = "jade", dot = false }) => {
+  const styles = {
+    jade:   { background: "#dcf5dc", color: "#114011", border: "1px solid #b8ecb8" },
+    amber:  { background: "#fef3c7", color: "#92400e", border: "1px solid #fde68a" },
+    rose:   { background: "#ffe4e6", color: "#be123c", border: "1px solid #fecdd3" },
+    blue:   { background: "#dbeafe", color: "#1d4ed8", border: "1px solid #bfdbfe" },
+    slate:  { background: "#f1f5f9", color: "#475569", border: "1px solid #e2e8f0" },
+  };
+  const dotColors = {
+    jade: "#28a428", amber: "#f59e0b", rose: "#e11d48", blue: "#2563eb", slate: "#94a3b8",
+  };
+  return (
+    <span style={{
+      display: "inline-flex", alignItems: "center", gap: "0.375rem",
+      fontSize: "0.75rem", fontWeight: 600, padding: "0.25rem 0.625rem",
+      borderRadius: "9999px", ...styles[color],
+    }}>
+      {dot && <span style={{ width: "0.375rem", height: "0.375rem", borderRadius: "50%", background: dotColors[color], flexShrink: 0 }} />}
+      {children}
+    </span>
+  );
+});
+
+// — Input field wrapper
+const Field = memo(({ label, children, hint }) => (
+  <div style={{ marginBottom: "1rem" }}>
+    {label && <label style={{ display: "block", fontSize: "0.75rem", fontWeight: 800, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: "0.5rem" }}>{label}</label>}
+    {children}
+    {hint && <p style={{ marginTop: "0.375rem", fontSize: "0.75rem", color: "#94a3b8" }}>{hint}</p>}
+  </div>
+));
+
+const Input = memo(({ ...props }) => (
+  <input
+    style={{
+      width: "100%", background: "rgba(255,255,255,0.6)", border: "1px solid rgba(255,255,255,0.8)",
+      borderRadius: "0.75rem", padding: "0.75rem 1rem", fontSize: "0.875rem", color: "#1e293b",
+      fontWeight: 500, outline: "none", fontFamily: "inherit", boxSizing: "border-box",
+      transition: "all 0.2s ease",
+    }}
+    onFocus={e => { e.target.style.border = "1px solid rgba(78,201,78,0.6)"; e.target.style.background = "rgba(255,255,255,0.9)"; }}
+    onBlur={e => { e.target.style.border = "1px solid rgba(255,255,255,0.8)"; e.target.style.background = "rgba(255,255,255,0.6)"; }}
+    {...props}
+  />
+));
+
+const Select = memo(({ children, ...props }) => (
+  <select
+    style={{
+      width: "100%", background: "rgba(255,255,255,0.6)", border: "1px solid rgba(255,255,255,0.8)",
+      borderRadius: "0.75rem", padding: "0.75rem 2.5rem 0.75rem 1rem", fontSize: "0.875rem",
+      color: "#1e293b", fontWeight: 500, outline: "none", fontFamily: "inherit",
+      appearance: "none", WebkitAppearance: "none", cursor: "pointer", boxSizing: "border-box",
+      backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%23475569' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E")`,
+      backgroundRepeat: "no-repeat", backgroundPosition: "right 14px center",
+    }}
+    {...props}
+  >{children}</select>
+));
+
+// — Section header
+const SectionHead = memo(({ title, count, action }) => (
+  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "0.75rem" }}>
+    <span style={{ fontSize: "0.75rem", fontWeight: 800, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.1em" }}>{title}</span>
+    <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+      {count != null && (
+        <motion.span
+          key={count}
+          initial={{ scale: 1.4, opacity: 0 }}
+          animate={{ scale: 1, opacity: 1 }}
+          transition={{ type: "spring", stiffness: 500, damping: 28 }}
+          style={{ fontSize: "0.75rem", fontWeight: 700, color: "#175c17", background: "#dcf5dc", border: "1px solid #b8ecb8", padding: "0.125rem 0.625rem", borderRadius: "9999px" }}
+        >{count}</motion.span>
+      )}
+      {action}
+    </div>
+  </div>
+));
+
+// — Avatar
+const Avatar = memo(({ name, size = "md", color = "jade" }) => {
+  const initials = name.split(" ").map(w => w[0]).join("").slice(0, 2).toUpperCase();
+  const sizes = { sm: { width: 32, height: 32, fontSize: "0.75rem" }, md: { width: 44, height: 44, fontSize: "0.875rem" }, lg: { width: 56, height: 56, fontSize: "1rem" } };
+  const gradients = { jade: "linear-gradient(135deg, #4ec94e, #1e7d1e)", amber: "linear-gradient(135deg, #fbbf24, #d97706)", blue: "linear-gradient(135deg, #60a5fa, #2563eb)" };
+  return (
+    <div style={{
+      ...sizes[size], background: gradients[color], borderRadius: "1rem",
+      display: "flex", alignItems: "center", justifyContent: "center",
+      fontWeight: 700, color: "#fff", flexShrink: 0,
+      boxShadow: "inset 0 1px 0 rgba(255,255,255,0.5)",
+    }}>
+      {initials}
+    </div>
+  );
+});
+
+// — Smart tip
+const Tip = memo(({ text }) => (
+  <motion.div
+    variants={anim.fadeUp} initial="initial" animate="animate"
+    style={{
+      display: "flex", alignItems: "flex-start", gap: "0.625rem", marginTop: "0.75rem",
+      padding: "0.75rem", background: "rgba(240,250,240,0.6)", border: "1px solid rgba(184,236,184,0.6)",
+      borderRadius: "0.75rem", backdropFilter: "blur(8px)",
+    }}
+  >
+    <Icon.Info size={14} style={{ color: "#1e7d1e", flexShrink: 0, marginTop: "0.125rem" }} />
+    <p style={{ fontSize: "0.75rem", color: "#475569", lineHeight: 1.625 }}>{text}</p>
+  </motion.div>
+));
+
+// — Empty state
+const Empty = memo(({ icon: IconComp, title, subtitle }) => (
+  <motion.div
+    variants={anim.fadeUp} initial="initial" animate="animate"
+    style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "3.5rem 0", textAlign: "center" }}
+  >
+    <div style={{ width: 64, height: 64, background: "rgba(255,255,255,0.7)", border: "1px solid rgba(255,255,255,0.8)", borderRadius: "1rem", display: "flex", alignItems: "center", justifyContent: "center", marginBottom: "1rem", boxShadow: "0 1px 2px rgba(0,0,0,0.05)" }}>
+      <IconComp size={24} style={{ color: "#94a3b8" }} />
+    </div>
+    <p style={{ fontSize: "0.875rem", fontWeight: 600, color: "#64748b" }}>{title}</p>
+    {subtitle && <p style={{ fontSize: "0.75rem", color: "#94a3b8", marginTop: "0.25rem", maxWidth: "20rem" }}>{subtitle}</p>}
+  </motion.div>
+));
+
+// — Toast stack
+const ToastStack = memo(({ toasts }) => {
+  const typeStyles = {
+    success: { background: "linear-gradient(to right, #175c17, #1e7d1e)", borderColor: "rgba(40,164,40,0.3)" },
+    error:   { background: "linear-gradient(to right, #be123c, #e11d48)", borderColor: "rgba(225,29,72,0.3)" },
+    info:    { background: "linear-gradient(to right, #1d4ed8, #2563eb)", borderColor: "rgba(37,99,235,0.3)" },
+  };
+  return (
+    <div style={{ position: "fixed", bottom: "1.5rem", left: "50%", transform: "translateX(-50%)", zIndex: 50, display: "flex", flexDirection: "column", gap: "0.5rem", pointerEvents: "none" }}>
+      <AnimatePresence>
+        {toasts.map(t => (
+          <motion.div
+            key={t.id}
+            initial={{ opacity: 0, y: 16, scale: 0.88 }}
+            animate={{ opacity: 1, y: 0,  scale: 1,   transition: { type: "spring", stiffness: 500, damping: 30 } }}
+            exit={{    opacity: 0, y: -8, scale: 0.94, transition: { duration: 0.2 } }}
+            style={{
+              display: "flex", alignItems: "center", gap: "0.625rem",
+              color: "#fff", fontSize: "0.75rem", fontWeight: 700,
+              padding: "0.75rem 1.25rem", borderRadius: "9999px",
+              boxShadow: "0 20px 48px rgba(0,0,0,0.18)", border: "1px solid",
+              whiteSpace: "nowrap", backdropFilter: "blur(16px)",
+              ...typeStyles[t.type],
+            }}
+          >
+            {t.type === "success" && <Icon.Check size={14} />}
+            {t.type === "error"   && <Icon.X size={14} />}
+            {t.type === "info"    && <Icon.Info size={14} />}
+            {t.msg}
+          </motion.div>
+        ))}
+      </AnimatePresence>
+    </div>
+  );
+});
+
+// ═══════════════════════════════════════════════════════════
+// § LAYOUT COMPONENTS
+// ═══════════════════════════════════════════════════════════
+
+const BgCanvas = () => (
+  <div style={{ position: "fixed", inset: 0, zIndex: 0, overflow: "hidden", pointerEvents: "none" }} aria-hidden="true">
+    <div className="bg-blob bg-blob-1" />
+    <div className="bg-blob bg-blob-2" />
+    <div className="bg-blob bg-blob-3" />
+    <div className="bg-blob bg-blob-4" />
+    <div className="bg-mesh" />
+  </div>
+);
+
+const ADMIN_NAV = [
+  { page: "admin-dash",      icon: Icon.Grid,      label: "Dashboard" },
+  { page: "track-customer",  icon: Icon.Users,      label: "Live Queue" },
+  { page: "generate-form",   icon: Icon.Clipboard,  label: "Form Builder" },
+  { page: "add-coordinator", icon: Icon.UserPlus,   label: "Team" },
+];
+const CLIENT_NAV = [
+  { page: "client-dash", icon: Icon.Target,  label: "My Spot" },
+  { page: "client-form", icon: Icon.PenLine, label: "Join Queue" },
+];
+
+const Sidebar = memo(() => {
+  const { user, page, nav, logout } = useApp();
+  return (
+    <aside className="sidebar">
+      <div className="sidebar-brand">
+        <motion.div whileHover={{ rotate: 8, scale: 1.08 }} transition={{ type: "spring", stiffness: 400, damping: 18 }} className="brand-icon">
+          <Icon.Leaf size={22} />
+        </motion.div>
+        <div>
+          <div className="brand-name">Q · Eliminator</div>
+          <div className="brand-sub">Queue Management</div>
+        </div>
+      </div>
+
+      <nav className="sidebar-nav">
+        <div className="sidebar-section-label">Main</div>
+        {ADMIN_NAV.map((item, i) => {
+          const active = page === item.page;
+          return (
+            <motion.button
+              key={item.page}
+              className={`sidebar-item ${active ? "sidebar-item-active" : ""}`}
+              onClick={() => nav(item.page)}
+              initial={{ opacity: 0, x: -12 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ delay: i * 0.05, duration: 0.26 }}
+              whileHover={{ x: 2 }}
+              whileTap={{ scale: 0.98 }}
+            >
+              <div className={`sidebar-icon ${active ? "sidebar-icon-active" : ""}`}>
+                <item.icon size={16} />
+              </div>
+              <span>{item.label}</span>
+              {active && <motion.div layoutId="sidebar-pill" className="sidebar-active-pill" transition={{ type: "spring", stiffness: 400, damping: 30 }} />}
+            </motion.button>
+          );
+        })}
+      </nav>
+
+      <div className="sidebar-footer">
+        <div className="sidebar-user">
+          <div style={{ width: 28, height: 28, background: "#dcf5dc", borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", fontSize: "0.75rem", fontWeight: 700, color: "#175c17" }}>
+            {(user?.email || "A").charAt(0).toUpperCase()}
+          </div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: "0.75rem", fontWeight: 600, color: "#334155", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{user?.email || "admin@app.com"}</div>
+            <div style={{ fontSize: "0.75rem", color: "#94a3b8", textTransform: "capitalize" }}>{user?.role}</div>
+          </div>
+        </div>
+        <Btn variant="ghost" size="sm" onClick={logout} style={{ width: "100%", marginTop: "0.5rem", color: "#e11d48" }}>
+          <Icon.LogOut size={14} /> Sign out
+        </Btn>
+      </div>
+    </aside>
+  );
+});
+
+const BottomNav = memo(({ tabs }) => {
+  const { page, nav } = useApp();
+  return (
+    <motion.nav
+      className="bottom-bar"
+      initial={{ y: 80, opacity: 0 }}
+      animate={{ y: 0,  opacity: 1 }}
+      transition={{ duration: 0.4, delay: 0.15, ease: [0.22, 1, 0.36, 1] }}
+    >
+      {tabs.map(item => {
+        const active = page === item.page;
+        return (
+          <motion.button
+            key={item.page}
+            className={`bnav-btn ${active ? "bnav-active" : ""}`}
+            onClick={() => nav(item.page)}
+            whileTap={{ scale: 0.85 }}
+          >
+            <motion.div
+              className={`bnav-icon ${active ? "bnav-icon-active" : ""}`}
+              animate={active ? { scale: 1.1 } : { scale: 1 }}
+              transition={{ type: "spring", stiffness: 400, damping: 22 }}
+            >
+              <item.icon size={18} />
+              {active && (
+                <motion.div layoutId="nav-dot" className="bnav-dot"
+                  transition={{ type: "spring", stiffness: 500, damping: 30 }} />
+              )}
+            </motion.div>
+            <span className="bnav-label">{item.label}</span>
+          </motion.button>
+        );
+      })}
+    </motion.nav>
+  );
+});
+
+const Topbar = memo(({ title }) => {
+  const { logout } = useApp();
+  return (
+    <motion.header
+      className="topbar"
+      initial={{ y: -56, opacity: 0 }}
+      animate={{ y: 0, opacity: 1 }}
+      transition={{ duration: 0.38, ease: [0.22, 1, 0.36, 1] }}
+    >
+      <div className="topbar-brand">
+        <motion.div className="brand-icon brand-icon-sm" whileHover={{ rotate: 10 }}>
+          <Icon.Leaf size={16} />
+        </motion.div>
+        <span className="topbar-title">Q · Eliminator</span>
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+        {title && <span style={{ fontSize: "0.75rem", fontWeight: 600, color: "#64748b" }}>{title}</span>}
+        <Btn variant="ghost" size="xs" onClick={logout}>
+          <Icon.LogOut size={15} />
+        </Btn>
+      </div>
+    </motion.header>
+  );
+});
+
+// ═══════════════════════════════════════════════════════════
+// § PAGE: AUTH
+// ═══════════════════════════════════════════════════════════
+const AuthPage = () => {
+  const { login } = useApp();
+  const [mode,  setMode]  = useState("login");
+  const [email, setEmail] = useState("");
+  const [pw,    setPw]    = useState("");
+  const [role,  setRole]  = useState("admin");
+  const [org,   setOrg]   = useState("hospital");
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = () => {
+    setLoading(true);
+    setTimeout(() => { setLoading(false); login(email || "demo@app.com", role); }, 900);
+  };
+
+  return (
+    <div className="auth-wrap">
+      <BgCanvas />
+      <div className="auth-inner">
+        <motion.div
+          initial={{ scale: 0.8, opacity: 0, y: -20 }}
+          animate={{ scale: 1,   opacity: 1, y: 0 }}
+          transition={{ duration: 0.5, ease: [0.34, 1.4, 0.64, 1] }}
+          className="auth-logo-wrap"
+        >
+          <div className="auth-logo">
+            <Icon.Leaf size={28} />
+          </div>
+          <div>
+            <h1 className="auth-app-name">Queue Eliminator</h1>
+            <p className="auth-tagline">Zero wait. Full control.</p>
+          </div>
+        </motion.div>
+
+        <motion.div
+          initial={{ opacity: 0, y: 24 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.4, delay: 0.15 }}
+          className="auth-card"
+        >
+          <div className="role-tabs">
+            {[["admin", "Admin"], ["coordinator", "Coordinator"], ["client", "Client"]].map(([v, l]) => (
+              <motion.button
+                key={v}
+                className={`role-tab ${role === v ? "role-tab-active" : ""}`}
+                onClick={() => setRole(v)}
+                whileTap={{ scale: 0.95 }}
+              >{l}</motion.button>
+            ))}
+          </div>
+
+          <Field label="Email address">
+            <Input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="you@example.com" />
+          </Field>
+          <Field label="Password">
+            <Input type="password" value={pw} onChange={e => setPw(e.target.value)} placeholder="••••••••" />
+          </Field>
+
+          <AnimatePresence mode="wait">
+            {mode === "signup" && (
+              <motion.div
+                key="org"
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: "auto" }}
+                exit={{    opacity: 0, height: 0 }}
+                transition={{ duration: 0.24 }}
+              >
+                <Field label="Organisation">
+                  <Select value={org} onChange={e => setOrg(e.target.value)}>
+                    {["Hospital", "Bank", "Government", "Clinic", "Other"].map(o => (
+                      <option key={o} value={o.toLowerCase()}>{o}</option>
+                    ))}
+                  </Select>
+                </Field>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          <Btn variant="primary" size="xl" onClick={handleSubmit} disabled={loading}>
+            {loading ? (
+              <motion.div animate={{ rotate: 360 }} transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
+                style={{ width: 16, height: 16, border: "2px solid rgba(255,255,255,0.4)", borderTopColor: "#fff", borderRadius: "50%" }} />
+            ) : <>{mode === "login" ? "Sign In" : "Create Account"} <Icon.ChevronR size={15} /></>}
+          </Btn>
+
+          <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", margin: "1rem 0" }}>
+            <div style={{ flex: 1, height: 1, background: "#e2e8f0" }} />
+            <span style={{ fontSize: "0.75rem", color: "#94a3b8", fontWeight: 500 }}>or</span>
+            <div style={{ flex: 1, height: 1, background: "#e2e8f0" }} />
+          </div>
+
+          <Btn variant="secondary" size="xl" onClick={handleSubmit}>
+            <Icon.Google size={16} /> Continue with Google
+          </Btn>
+
+          <p style={{ textAlign: "center", fontSize: "0.75rem", color: "#64748b", marginTop: "1.25rem" }}>
+            {mode === "login" ? "Don't have an account? " : "Already have an account? "}
+            <button style={{ color: "#1e7d1e", fontWeight: 700, background: "none", border: "none", cursor: "pointer", padding: 0, fontFamily: "inherit" }}
+              onClick={() => setMode(mode === "login" ? "signup" : "login")}>
+              {mode === "login" ? "Sign up" : "Sign in"}
+            </button>
+          </p>
+        </motion.div>
+      </div>
+    </div>
+  );
+};
+
+// ═══════════════════════════════════════════════════════════
+// § PAGE: ADMIN DASHBOARD
+// ═══════════════════════════════════════════════════════════
+const StatCard = memo(({ label, value, color = "default", sub, icon: IconComp }) => {
+  const prev = usePrevious(value);
+  const colorMap = {
+    default: { bg: "rgba(255,255,255,0.6)", text: "#1e293b" },
+    jade:    { bg: "linear-gradient(135deg,rgba(40,164,40,0.12),rgba(23,92,23,0.07))", text: "#175c17" },
+    amber:   { bg: "rgba(255,251,235,0.8)", text: "#b45309" },
+    rose:    { bg: "rgba(255,241,242,0.8)", text: "#e11d48" },
+    blue:    { bg: "rgba(239,246,255,0.8)", text: "#2563eb" },
+  };
+  const c = colorMap[color] || colorMap.default;
+  return (
+    <motion.div
+      style={{ background: c.bg, border: "1px solid rgba(255,255,255,0.7)", borderRadius: "1rem", padding: "1.25rem", boxShadow: "0 1px 2px rgba(0,0,0,0.05)", backdropFilter: "blur(16px)" }}
+      variants={anim.cardItem}
+      whileHover={{ y: -4, boxShadow: "0 12px 32px rgba(0,0,0,0.10)", transition: { type: "spring", stiffness: 400, damping: 22 } }}
+    >
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: "0.5rem" }}>
+        <span style={{ fontSize: "0.75rem", fontWeight: 800, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.1em" }}>{label}</span>
+        {IconComp && <IconComp size={16} style={{ color: c.text, opacity: 0.6 }} />}
+      </div>
+      <motion.div
+        key={value}
+        initial={prev !== undefined ? { y: -12, opacity: 0 } : false}
+        animate={{ y: 0, opacity: 1 }}
+        transition={{ type: "spring", stiffness: 400, damping: 25 }}
+        style={{ fontSize: "2.25rem", fontWeight: 900, letterSpacing: "-0.025em", color: c.text }}
+      >{value}</motion.div>
+      {sub && <p style={{ fontSize: "0.75rem", color: "#94a3b8", marginTop: "0.25rem", fontWeight: 500 }}>{sub}</p>}
+    </motion.div>
+  );
+});
+
+const AdminDash = () => {
+  const { stats, customers, nav } = useApp();
+  const waiting   = customers.filter(c => c.status === "Waiting").length;
+  const completed = customers.filter(c => c.status === "Completed").length;
+
+  const quickActions = [
+    { page: "track-customer",  icon: Icon.Users,      color: "#1e7d1e",  bg: "rgba(220,245,220,0.8)",   title: "Live Queue",      sub: `${waiting} waiting now`,    badge: waiting > 0 ? waiting : null },
+    { page: "generate-form",   icon: Icon.Clipboard,  color: "#2563eb",  bg: "rgba(219,234,254,0.8)",   title: "Form Builder",    sub: "Build intake forms" },
+    { page: "add-coordinator", icon: Icon.UserPlus,   color: "#d97706",  bg: "rgba(254,243,199,0.8)",   title: "Team",            sub: "Manage coordinators" },
+  ];
+
+  return (
+    <motion.div initial={anim.page.initial} animate={anim.page.animate} exit={anim.page.exit}>
+      <motion.div variants={anim.fadeUp} initial="initial" animate="animate" className="hero-banner" style={{ marginBottom: "1.5rem" }}>
+        <div className="hero-content">
+          <div style={{ color: "rgba(255,255,255,0.7)", fontSize: "0.75rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: "0.25rem" }}>Good morning 👋</div>
+          <h1 style={{ fontSize: "1.5rem", fontWeight: 900, color: "#fff", letterSpacing: "-0.025em", marginBottom: "0.25rem" }}>Queue Control Center</h1>
+          <p style={{ color: "rgba(255,255,255,0.7)", fontSize: "0.875rem" }}>Real-time view. Total control. No chaos.</p>
+        </div>
+        <div className="hero-orb" />
+        <div className="hero-orb hero-orb-2" />
+      </motion.div>
+
+      <motion.div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: "0.75rem", marginBottom: "1.5rem" }} variants={anim.stagger} initial="initial" animate="animate">
+        <StatCard label="Total Today" value={stats.total}  color="default" icon={Icon.Hash} />
+        <StatCard label="Waiting"     value={waiting}      color="jade"    icon={Icon.Clock} sub="Live count" />
+        <StatCard label="Completed"   value={completed}    color="default" icon={Icon.Check} />
+        <StatCard label="Missed"      value={stats.missed} color="rose"    icon={Icon.X}     sub="Action needed" />
+      </motion.div>
+
+      <div style={{ marginBottom: "1rem" }}>
+        <SectionHead title="Quick Actions" />
+        <motion.div style={{ display: "grid", gridTemplateColumns: "repeat(1, 1fr)", gap: "0.75rem" }} variants={anim.stagger} initial="initial" animate="animate">
+          {quickActions.map(a => (
+            <Card key={a.page} onClick={() => nav(a.page)} style={{ padding: "1rem" }} variants={anim.cardItem}>
+              <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+                <div style={{ width: 44, height: 44, borderRadius: "0.75rem", background: a.bg, color: a.color, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                  <a.icon size={20} />
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 700, fontSize: "0.875rem", color: "#1e293b" }}>{a.title}</div>
+                  <div style={{ fontSize: "0.75rem", color: "#94a3b8", marginTop: "0.125rem" }}>{a.sub}</div>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                  {a.badge && <Badge color="jade" dot>{a.badge}</Badge>}
+                  <Icon.ChevronR size={14} style={{ color: "#94a3b8" }} />
+                </div>
+              </div>
+            </Card>
+          ))}
+        </motion.div>
+      </div>
+
+      <Tip text="Tip: Peak hours? Keep an extra counter ready. Avg wait time today: 8 min." />
+    </motion.div>
+  );
+};
+
+// ═══════════════════════════════════════════════════════════
+// § PAGE: TRACK CUSTOMERS
+// ═══════════════════════════════════════════════════════════
+const CustomerCard = memo(({ customer, isFirst, onRemove }) => {
+  const initials = customer.name.split(" ").map(w => w[0]).join("").slice(0, 2);
+  return (
+    <motion.div
+      layout
+      variants={anim.cardItem}
+      initial="initial"
+      animate="animate"
+      exit={anim.cardItem.exit}
+      className={`customer-card ${isFirst ? "customer-card-active" : ""}`}
+      whileHover={{ y: -2, transition: { duration: 0.18 } }}
+    >
+      <div style={{ width: 44, height: 44, borderRadius: "1rem", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "0.875rem", fontWeight: 900, flexShrink: 0, background: isFirst ? "#b8ecb8" : "#f1f5f9", color: isFirst ? "#114011" : "#475569" }}>
+        {initials}
+      </div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: "0.875rem", fontWeight: 700, color: "#1e293b", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{customer.name}</div>
+        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginTop: "0.125rem" }}>
+          <span style={{ fontSize: "0.75rem", fontWeight: 700, color: "#1e7d1e", background: "#dcf5dc", border: "1px solid #b8ecb8", padding: "0.125rem 0.5rem", borderRadius: "0.375rem", fontFamily: "monospace" }}>{customer.token}</span>
+          <span style={{ fontSize: "0.75rem", color: "#94a3b8" }}>{customer.time}</span>
+        </div>
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "0.375rem", flexShrink: 0 }}>
+        {isFirst && (
+          <motion.span animate={{ opacity: [0.5, 1, 0.5] }} transition={{ duration: 2, repeat: Infinity }} style={{ fontSize: "0.75rem", fontWeight: 800, color: "#1e7d1e", textTransform: "uppercase", letterSpacing: "0.05em" }}>Serving ✦</motion.span>
+        )}
+        <Btn variant="danger" size="xs" onClick={() => onRemove(customer.id)}>
+          <Icon.X size={11} />
+        </Btn>
+      </div>
+    </motion.div>
+  );
+});
+
+const TrackCustomer = () => {
+  const { customers, nextCustomer, skipCustomer, removeCustomer } = useApp();
+  const { isDesktop } = useBreakpoint();
+  const [toasts, showToast] = useToast();
+
+  const waiting   = customers.filter(c => c.status === "Waiting");
+  const completed = customers.filter(c => c.status === "Completed");
+
+  const handleNext = () => { nextCustomer(); showToast("Customer called successfully ✓", "success"); };
+  const handleSkip = () => { skipCustomer(); showToast("Customer moved to next position", "info"); };
+
+  return (
+    <motion.div initial={anim.page.initial} animate={anim.page.animate} exit={anim.page.exit}>
+      <ToastStack toasts={toasts} />
+
+      {!isDesktop && (
+        <div style={{ marginBottom: "1.25rem" }}>
+          <h1 style={{ fontSize: "1.5rem", fontWeight: 900, color: "#1e293b", letterSpacing: "-0.025em" }}>Live Queue</h1>
+          <p style={{ fontSize: "0.875rem", color: "#64748b", marginTop: "0.125rem" }}>Serve faster. Stay organised.</p>
+        </div>
+      )}
+
+      <div style={isDesktop ? { display: "grid", gridTemplateColumns: "1fr 280px", gap: "1.5rem", alignItems: "start" } : {}}>
+        <div>
+          <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1.25rem" }}>
+            <Btn variant="primary" size="md" onClick={handleNext} disabled={waiting.length === 0}>
+              <Icon.Play size={14} /> Call Next
+            </Btn>
+            <Btn variant="warning" size="md" onClick={handleSkip} disabled={waiting.length < 2}>
+              <Icon.Skip size={14} /> Skip
+            </Btn>
+          </div>
+
+          <SectionHead title="In Queue" count={waiting.length} />
+          {waiting.length === 0
+            ? <Empty icon={Icon.Check} title="Queue is empty" subtitle="Customers will appear once they join" />
+            : (
+              <AnimatePresence>
+                {waiting.map((c, i) => (
+                  <CustomerCard key={c.id} customer={c} isFirst={i === 0} onRemove={removeCustomer} />
+                ))}
+              </AnimatePresence>
+            )
+          }
+
+          {completed.length > 0 && (
+            <div style={{ marginTop: "1.5rem" }}>
+              <SectionHead title="Completed" count={completed.length} />
+              <AnimatePresence>
+                {completed.map(c => (
+                  <motion.div key={c.id} className="customer-card" style={{ opacity: 0.7 }} variants={anim.cardItem} initial="initial" animate="animate">
+                    <div style={{ width: 44, height: 44, borderRadius: "1rem", background: "#dcf5dc", color: "#175c17", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "0.875rem", fontWeight: 700, flexShrink: 0 }}>
+                      {c.name.split(" ").map(w => w[0]).join("").slice(0, 2)}
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: "0.875rem", fontWeight: 600, color: "#334155", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.name}</div>
+                      <div style={{ fontSize: "0.75rem", color: "#94a3b8", fontFamily: "monospace" }}>{c.token}</div>
+                    </div>
+                    <Badge color="jade" dot>Served</Badge>
+                  </motion.div>
+                ))}
+              </AnimatePresence>
+            </div>
+          )}
+        </div>
+
+        {isDesktop && (
+          <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+            <Card style={{ padding: "1rem", position: "sticky", top: "1rem" }}>
+              <div style={{ fontSize: "0.75rem", fontWeight: 800, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: "1rem" }}>Live Stats</div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: "0.75rem" }}>
+                {[
+                  { val: waiting.length,   label: "Waiting",   color: "#1e7d1e",  bg: "#f0faf0" },
+                  { val: completed.length, label: "Served",    color: "#475569",  bg: "#f8fafc" },
+                ].map(s => (
+                  <div key={s.label} style={{ background: s.bg, borderRadius: "0.75rem", padding: "0.75rem", textAlign: "center", border: "1px solid rgba(255,255,255,0.6)" }}>
+                    <motion.div key={s.val} initial={{ scale: 1.3, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} style={{ fontSize: "1.875rem", fontWeight: 900, color: s.color }}>{s.val}</motion.div>
+                    <div style={{ fontSize: "0.75rem", color: "#94a3b8", fontWeight: 700, marginTop: "0.25rem", textTransform: "uppercase", letterSpacing: "0.05em" }}>{s.label}</div>
+                  </div>
+                ))}
+              </div>
+              <div style={{ marginTop: "1rem", paddingTop: "1rem", borderTop: "1px solid #f1f5f9" }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: "0.75rem", color: "#64748b", marginBottom: "0.375rem" }}>
+                  <span>Completion rate</span>
+                  <span style={{ fontWeight: 700, color: "#1e7d1e" }}>{waiting.length + completed.length > 0 ? Math.round(completed.length / (waiting.length + completed.length) * 100) : 0}%</span>
+                </div>
+                <div style={{ height: 8, background: "#f1f5f9", borderRadius: "9999px", overflow: "hidden" }}>
+                  <motion.div
+                    style={{ height: "100%", background: "linear-gradient(135deg, #28a428, #175c17)", borderRadius: "9999px" }}
+                    initial={{ width: 0 }}
+                    animate={{ width: `${waiting.length + completed.length > 0 ? Math.round(completed.length / (waiting.length + completed.length) * 100) : 0}%` }}
+                    transition={{ duration: 0.8, ease: "easeOut" }}
+                  />
+                </div>
+              </div>
+            </Card>
+            <Tip text="Follow the order or make quick decisions when needed." />
+          </div>
+        )}
+      </div>
+    </motion.div>
+  );
+};
+
+// ═══════════════════════════════════════════════════════════
+// § PAGE: FORM BUILDER
+// ═══════════════════════════════════════════════════════════
+const GenerateForm = () => {
+  const { fields, addField, removeField } = useApp();
+  const { isDesktop } = useBreakpoint();
+  const [type,  setType]  = useState("input");
+  const [title, setTitle] = useState("");
+  const [ph,    setPh]    = useState("");
+  const [opts,  setOpts]  = useState("");
+  const [toasts, showToast] = useToast();
+
+  const handleAdd = () => {
+    if (!title.trim()) return;
+    addField({ type, title, placeholder: ph, options: opts.split(",").map(o => o.trim()).filter(Boolean) });
+    setTitle(""); setPh(""); setOpts("");
+    showToast("Field added!", "success");
+  };
+
+  const typeIcons  = { input: Icon.PenLine, checkbox: Icon.Check, menu: Icon.Hash };
+  const typeColors = { input: "blue", checkbox: "jade", menu: "amber" };
+  const typeIconBg = { input: { bg: "rgba(219,234,254,0.8)", color: "#2563eb" }, checkbox: { bg: "rgba(220,245,220,0.8)", color: "#1e7d1e" }, menu: { bg: "rgba(254,243,199,0.8)", color: "#d97706" } };
+
+  return (
+    <motion.div initial={anim.page.initial} animate={anim.page.animate} exit={anim.page.exit}>
+      <ToastStack toasts={toasts} />
+
+      {!isDesktop && (
+        <div style={{ marginBottom: "1.25rem" }}>
+          <h1 style={{ fontSize: "1.5rem", fontWeight: 900, color: "#1e293b", letterSpacing: "-0.025em" }}>Form Builder</h1>
+          <p style={{ fontSize: "0.875rem", color: "#64748b", marginTop: "0.125rem" }}>Create your intake form in seconds.</p>
+        </div>
+      )}
+
+      <div style={isDesktop ? { display: "grid", gridTemplateColumns: "360px 1fr", gap: "1.5rem", alignItems: "start" } : {}}>
+        <Card style={{ padding: "1.25rem", ...(isDesktop ? { position: "sticky", top: "1rem" } : { marginBottom: "1rem" }) }}>
+          <div style={{ fontSize: "0.75rem", fontWeight: 800, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: "1rem" }}>Add Field</div>
+
+          <Field label="Field type">
+            <Select value={type} onChange={e => setType(e.target.value)}>
+              <option value="input">Text Input</option>
+              <option value="checkbox">Checkbox Group</option>
+              <option value="menu">Dropdown Menu</option>
+            </Select>
+          </Field>
+          <Field label="Label">
+            <Input value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g. Full Name" />
+          </Field>
+
+          <AnimatePresence mode="wait">
+            {type === "input" && (
+              <motion.div key="ph" initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} transition={{ duration: 0.2 }}>
+                <Field label="Placeholder text">
+                  <Input value={ph} onChange={e => setPh(e.target.value)} placeholder="e.g. Enter your name" />
+                </Field>
+              </motion.div>
+            )}
+            {(type === "checkbox" || type === "menu") && (
+              <motion.div key="opts" initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} transition={{ duration: 0.2 }}>
+                <Field label="Options (comma separated)">
+                  <Input value={opts} onChange={e => setOpts(e.target.value)} placeholder="Option A, Option B, Option C" />
+                </Field>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          <Btn variant="primary" size="xl" onClick={handleAdd} disabled={!title.trim()}>
+            <Icon.Plus size={15} /> Add Field
+          </Btn>
+          <Tip text="Keep forms short for faster entries. Less is more." />
+        </Card>
+
+        <div>
+          <SectionHead title="Form Preview" count={fields.length} />
+          {fields.length === 0
+            ? <Empty icon={Icon.Clipboard} title="No fields yet" subtitle="Add your first field from the builder panel" />
+            : (
+              <>
+                <AnimatePresence>
+                  {fields.map(f => {
+                    const TypeIcon = typeIcons[f.type];
+                    const tStyle = typeIconBg[f.type] || typeIconBg.input;
+                    return (
+                      <motion.div
+                        key={f.id}
+                        className="field-chip"
+                        variants={anim.cardItem}
+                        initial="initial"
+                        animate="animate"
+                        exit={anim.cardItem.exit}
+                        whileHover={{ x: 3, transition: { duration: 0.15 } }}
+                        layout
+                      >
+                        <div style={{ width: 36, height: 36, borderRadius: "0.75rem", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, background: tStyle.bg, color: tStyle.color }}>
+                          <TypeIcon size={15} />
+                        </div>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: "0.875rem", fontWeight: 700, color: "#1e293b" }}>{f.title}</div>
+                          {f.options?.length > 0 && (
+                            <div style={{ fontSize: "0.75rem", color: "#94a3b8", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginTop: "0.125rem" }}>{f.options.join(" · ")}</div>
+                          )}
+                        </div>
+                        <Badge color={typeColors[f.type]}>{f.type}</Badge>
+                        <Btn variant="danger" size="xs" onClick={() => removeField(f.id)}>
+                          <Icon.X size={11} />
+                        </Btn>
+                      </motion.div>
+                    );
+                  })}
+                </AnimatePresence>
+                <div style={{ marginTop: "1.25rem", display: "flex", gap: "0.5rem" }}>
+                  <Btn variant="primary" size="md" onClick={() => showToast("Form published! QR code ready.", "success")}>
+                    <Icon.QR size={15} /> Generate QR
+                  </Btn>
+                  <Btn variant="outline" size="md" onClick={() => showToast("Form published!", "success")}>
+                    <Icon.Bolt size={14} /> Publish
+                  </Btn>
+                </div>
+              </>
+            )
+          }
+        </div>
+      </div>
+    </motion.div>
+  );
+};
+
+// ═══════════════════════════════════════════════════════════
+// § PAGE: ADD COORDINATOR
+// ═══════════════════════════════════════════════════════════
+const AddCoordinator = () => {
+  const { coords, addCoord, removeCoord } = useApp();
+  const { isDesktop } = useBreakpoint();
+  const [email, setEmail] = useState("");
+  const [name,  setName]  = useState("");
+  const [role,  setRole]  = useState("Doctor");
+  const [toasts, showToast] = useToast();
+
+  const handleAdd = () => {
+    if (!email.trim()) return;
+    addCoord({ email, name, role });
+    setEmail(""); setName(""); setRole("Doctor");
+    showToast("Coordinator added!", "success");
+  };
+
+  return (
+    <motion.div initial={anim.page.initial} animate={anim.page.animate} exit={anim.page.exit}>
+      <ToastStack toasts={toasts} />
+
+      {!isDesktop && (
+        <div style={{ marginBottom: "1.25rem" }}>
+          <h1 style={{ fontSize: "1.5rem", fontWeight: 900, color: "#1e293b", letterSpacing: "-0.025em" }}>Team</h1>
+          <p style={{ fontSize: "0.875rem", color: "#64748b", marginTop: "0.125rem" }}>Manage your queue coordinators.</p>
+        </div>
+      )}
+
+      <div style={isDesktop ? { display: "grid", gridTemplateColumns: "340px 1fr", gap: "1.5rem", alignItems: "start" } : {}}>
+        <Card style={{ padding: "1.25rem", ...(isDesktop ? { position: "sticky", top: "1rem" } : { marginBottom: "1rem" }) }}>
+          <div style={{ fontSize: "0.75rem", fontWeight: 800, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: "1rem" }}>Add Member</div>
+          <Field label="Full name">
+            <Input value={name} onChange={e => setName(e.target.value)} placeholder="Dr. Suresh Kumar" />
+          </Field>
+          <Field label="Email address">
+            <Input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="name@hospital.com"
+              onKeyDown={e => e.key === "Enter" && handleAdd()} />
+          </Field>
+          <Field label="Role">
+            <Select value={role} onChange={e => setRole(e.target.value)}>
+              {["Doctor", "Nurse", "Coordinator", "Receptionist", "Admin"].map(r => (
+                <option key={r}>{r}</option>
+              ))}
+            </Select>
+          </Field>
+          <Btn variant="primary" size="xl" onClick={handleAdd} disabled={!email.trim()}>
+            <Icon.Plus size={15} /> Add to Team
+          </Btn>
+          <Tip text="Coordinators can call, skip and manage the queue from any device." />
+        </Card>
+
+        <div>
+          <SectionHead title="Active Team" count={coords.length} />
+          {coords.length === 0
+            ? <Empty icon={Icon.Users} title="No team members yet" subtitle="Add coordinators to help manage the queue" />
+            : (
+              <AnimatePresence>
+                {coords.map(c => (
+                  <motion.div
+                    key={c.id}
+                    className="customer-card"
+                    variants={anim.slideRight}
+                    initial="initial"
+                    animate="animate"
+                    exit={anim.slideRight.exit}
+                    layout
+                    whileHover={{ y: -2 }}
+                  >
+                    <Avatar name={c.name} size="md" />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: "0.875rem", fontWeight: 700, color: "#1e293b" }}>{c.name}</div>
+                      <div style={{ fontSize: "0.75rem", color: "#94a3b8", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.email}</div>
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                      <Badge color="jade">{c.role}</Badge>
+                      <Btn variant="danger" size="xs" onClick={() => removeCoord(c.id)}>
+                        <Icon.X size={11} />
+                      </Btn>
+                    </div>
+                  </motion.div>
+                ))}
+              </AnimatePresence>
+            )
+          }
+        </div>
+      </div>
+    </motion.div>
+  );
+};
+
+// ═══════════════════════════════════════════════════════════
+// § PAGE: CLIENT FORM
+// ═══════════════════════════════════════════════════════════
+const ClientForm = () => {
+  const { fields, nav } = useApp();
+  const [vals,  setVals]  = useState({});
+  const [toasts, showToast] = useToast();
+
+  const displayFields = fields.length > 0 ? fields : [
+    { id: "df1", type: "input",    title: "Full Name",        placeholder: "Enter your full name" },
+    { id: "df2", type: "menu",     title: "Purpose of Visit", options: ["Consultation", "Follow-up", "Emergency", "Routine checkup"] },
+    { id: "df3", type: "checkbox", title: "Preferred Time",   options: ["Morning (9–12)", "Afternoon (12–4)", "Evening (4–7)"] },
+  ];
+
+  const handleSubmit = () => {
+    showToast("Token confirmed! Joining queue…", "success");
+    setTimeout(() => nav("client-dash"), 1600);
+  };
+
+  return (
+    <motion.div initial={anim.page.initial} animate={anim.page.animate} exit={anim.page.exit}>
+      <ToastStack toasts={toasts} />
+      <h1 style={{ fontSize: "1.5rem", fontWeight: 900, color: "#1e293b", letterSpacing: "-0.025em", marginBottom: "0.25rem" }}>Join the Queue</h1>
+      <p style={{ fontSize: "0.875rem", color: "#64748b", marginBottom: "1.25rem" }}>Fill once. Relax while you wait.</p>
+
+      <Card style={{ padding: "1.25rem", marginBottom: "0.75rem" }}>
+        <motion.div variants={anim.stagger} initial="initial" animate="animate">
+          {displayFields.map(f => (
+            <motion.div key={f.id} variants={anim.fadeUp} style={{ marginBottom: "1.25rem" }}>
+              <label style={{ display: "block", fontSize: "0.75rem", fontWeight: 800, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: "0.5rem" }}>{f.title}</label>
+              {f.type === "input" && (
+                <Input placeholder={f.placeholder || ""} value={vals[f.id] || ""} onChange={e => setVals({ ...vals, [f.id]: e.target.value })} />
+              )}
+              {f.type === "menu" && (
+                <Select value={vals[f.id] || ""} onChange={e => setVals({ ...vals, [f.id]: e.target.value })}>
+                  <option value="">Select an option</option>
+                  {f.options?.map(o => <option key={o}>{o}</option>)}
+                </Select>
+              )}
+              {f.type === "checkbox" && (
+                <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+                  {f.options?.map(o => {
+                    const checked = !!vals[`${f.id}-${o}`];
+                    return (
+                      <motion.div
+                        key={o}
+                        onClick={() => setVals({ ...vals, [`${f.id}-${o}`]: !checked })}
+                        whileTap={{ scale: 0.98 }}
+                        style={{
+                          display: "flex", alignItems: "center", gap: "0.75rem",
+                          padding: "0.875rem", borderRadius: "0.75rem", cursor: "pointer",
+                          userSelect: "none", WebkitUserSelect: "none",
+                          border: `1px solid ${checked ? "rgba(40,164,40,0.35)" : "rgba(203,213,225,0.5)"}`,
+                          background: checked ? "rgba(240,250,240,0.7)" : "rgba(255,255,255,0.6)",
+                          backdropFilter: "blur(8px)",
+                          transition: "all 0.18s ease",
+                        }}
+                      >
+                        <motion.div
+                          animate={{ background: checked ? "#1e7d1e" : "rgba(255,255,255,0.9)" }}
+                          transition={{ duration: 0.18 }}
+                          style={{ width: 20, height: 20, borderRadius: "0.375rem", border: `2px solid ${checked ? "#1e7d1e" : "#cbd5e1"}`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}
+                        >
+                          <AnimatePresence>
+                            {checked && (
+                              <motion.div key="c" initial={{ scale: 0, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0 }} transition={{ type: "spring", stiffness: 500, damping: 25 }}>
+                                <Icon.Check size={11} style={{ color: "#fff", strokeWidth: 3 }} />
+                              </motion.div>
+                            )}
+                          </AnimatePresence>
+                        </motion.div>
+                        <span style={{ fontSize: "0.875rem", fontWeight: 500, color: "#334155" }}>{o}</span>
+                      </motion.div>
+                    );
+                  })}
+                </div>
+              )}
+            </motion.div>
+          ))}
+        </motion.div>
+      </Card>
+
+      <Tip text="Double-check details to avoid delays. You'll get a token number after submitting." />
+
+      <div style={{ display: "flex", gap: "0.5rem", marginTop: "1rem" }}>
+        <Btn variant="primary" size="lg" style={{ flex: 1 }} onClick={handleSubmit}>
+          Get Token <Icon.ChevronR size={15} />
+        </Btn>
+        <Btn variant="secondary" size="lg" onClick={() => nav("client-dash")}>
+          Cancel
+        </Btn>
+      </div>
+    </motion.div>
+  );
+};
+
+// ═══════════════════════════════════════════════════════════
+// § PAGE: CLIENT DASHBOARD
+// ═══════════════════════════════════════════════════════════
+const ClientDash = () => {
+  const { clientData } = useApp();
+  const [refreshed, setRefreshed] = useState(false);
+
+  const pulse = () => {
+    setRefreshed(true);
+    setTimeout(() => setRefreshed(false), 1200);
+  };
+
+  return (
+    <motion.div initial={anim.page.initial} animate={anim.page.animate} exit={anim.page.exit}>
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: "1.25rem" }}>
+        <div>
+          <h1 style={{ fontSize: "1.5rem", fontWeight: 900, color: "#1e293b", letterSpacing: "-0.025em" }}>Your Status</h1>
+          <p style={{ fontSize: "0.875rem", color: "#64748b", marginTop: "0.125rem" }}>Live updates. No guessing.</p>
+        </div>
+        <Btn variant="secondary" size="sm" onClick={pulse}>
+          <motion.div animate={refreshed ? { rotate: 360 } : { rotate: 0 }} transition={{ duration: 0.6 }}>
+            <Icon.Sparkles size={14} />
+          </motion.div>
+          Refresh
+        </Btn>
+      </div>
+
+      <motion.div
+        variants={anim.scaleIn} initial="initial" animate="animate"
+        style={{
+          position: "relative", overflow: "hidden",
+          background: "linear-gradient(135deg, rgba(40,164,40,0.9), rgba(23,92,23,0.95))",
+          borderRadius: "1.5rem", padding: "2rem", textAlign: "center", marginBottom: "1rem",
+          boxShadow: "0 16px 48px rgba(23,92,23,0.32), inset 0 1px 0 rgba(255,255,255,0.18)",
+          border: "1px solid rgba(255,255,255,0.18)",
+        }}
+      >
+        <div style={{ position: "absolute", inset: 0, pointerEvents: "none" }}>
+          <div style={{ position: "absolute", top: -32, right: -32, width: 128, height: 128, background: "radial-gradient(circle, rgba(255,255,255,0.12), transparent 70%)", borderRadius: "50%" }} />
+          <div style={{ position: "absolute", bottom: -16, left: -16, width: 80, height: 80, background: "radial-gradient(circle, rgba(255,255,255,0.10), transparent 70%)", borderRadius: "50%" }} />
+        </div>
+        <div style={{ position: "relative", zIndex: 1 }}>
+          <div style={{ color: "rgba(255,255,255,0.6)", fontSize: "0.75rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: "0.5rem" }}>Position in queue</div>
+          <motion.div
+            style={{ fontSize: "6rem", fontWeight: 900, color: "#fff", lineHeight: 1, letterSpacing: "-0.05em" }}
+            initial={{ scale: 0.5, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            transition={{ delay: 0.15, type: "spring", stiffness: 250, damping: 20 }}
+          >{clientData.position}</motion.div>
+          <div style={{ color: "rgba(255,255,255,0.7)", fontSize: "0.875rem", fontWeight: 500, marginTop: "0.5rem" }}>people ahead of you</div>
+          <motion.div
+            animate={{ opacity: [0.5, 1, 0.5], scale: [0.98, 1.02, 0.98] }}
+            transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
+            style={{ display: "inline-block", marginTop: "1rem" }}
+          >
+            <Badge color="jade">
+              <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#28a428", animation: "pulse 2s infinite", display: "inline-block" }} />
+              Waiting
+            </Badge>
+          </motion.div>
+        </div>
+      </motion.div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: "0.75rem", marginBottom: "1rem" }}>
+        <Card style={{ padding: "1rem" }}>
+          <div style={{ fontSize: "0.75rem", fontWeight: 800, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: "0.5rem" }}>Your Token</div>
+          <motion.span
+            initial={{ opacity: 0, scale: 0.85 }}
+            animate={{ opacity: 1, scale: 1 }}
+            transition={{ delay: 0.2, type: "spring", stiffness: 300 }}
+            style={{ fontSize: "1.5rem", fontWeight: 900, color: "#1e7d1e", fontFamily: "monospace" }}
+          >{clientData.token}</motion.span>
+        </Card>
+        <Card style={{ padding: "1rem" }}>
+          <div style={{ fontSize: "0.75rem", fontWeight: 800, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: "0.5rem" }}>Est. Wait</div>
+          <div style={{ display: "flex", alignItems: "flex-end", gap: "0.25rem" }}>
+            <span style={{ fontSize: "2.25rem", fontWeight: 900, color: "#d97706" }}>{clientData.estimatedWait}</span>
+            <span style={{ fontSize: "0.875rem", color: "#94a3b8", marginBottom: "0.375rem", fontWeight: 500 }}>min</span>
+          </div>
+        </Card>
+      </div>
+
+      <Card style={{ padding: "1rem", border: "1px solid rgba(184,236,184,0.6)", background: "rgba(240,250,240,0.4)" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", color: "#175c17", fontWeight: 700, fontSize: "0.875rem", marginBottom: "0.5rem" }}>
+          <Icon.Bell size={15} /> Wait Smart. Move only when it's your turn.
+        </div>
+        <p style={{ fontSize: "0.75rem", color: "#64748b", lineHeight: 1.625 }}>We'll update your position in real-time. Stay nearby once you're in the top 3.</p>
+        <Tip text="Stay within range once you're close ⚡" />
+      </Card>
+    </motion.div>
+  );
+};
+
+// ═══════════════════════════════════════════════════════════
+// § SHELL — routing + layout
+// FIX: PAGES moved inside Shell as a function to avoid stale JSX element issues
+// ═══════════════════════════════════════════════════════════
+const PAGE_TITLES = {
+  "admin-dash":      "Dashboard",
+  "track-customer":  "Live Queue",
+  "generate-form":   "Form Builder",
+  "add-coordinator": "Team",
+  "client-dash":     "My Spot",
+  "client-form":     "Join Queue",
+};
+
+const Shell = () => {
+  const { user, page } = useApp();
+  const { isDesktop } = useBreakpoint();
+
+  // FIX: Pages defined as a render function lookup, not pre-instantiated JSX objects
+  const renderPage = () => {
+    switch (page) {
+      case "admin-dash":      return <AdminDash />;
+      case "track-customer":  return <TrackCustomer />;
+      case "generate-form":   return <GenerateForm />;
+      case "add-coordinator": return <AddCoordinator />;
+      case "client-dash":     return <ClientDash />;
+      case "client-form":     return <ClientForm />;
+      default:                return <AdminDash />;
+    }
+  };
+
+  if (!user) return <AuthPage />;
+
+  const isAdmin = user.role !== "client";
+  const tabs    = isAdmin ? ADMIN_NAV : CLIENT_NAV;
+
+  if (isAdmin && isDesktop) {
+    return (
+      <div className="desktop-shell">
+        <BgCanvas />
+        <Sidebar />
+        <div className="desktop-main">
+          <div className="desktop-topbar">
+            <h2 style={{ fontSize: "1.25rem", fontWeight: 800, color: "#1e293b", letterSpacing: "-0.025em" }}>{PAGE_TITLES[page]}</h2>
+            <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", background: "rgba(255,255,255,0.7)", border: "1px solid rgba(255,255,255,0.8)", borderRadius: "9999px", padding: "0.5rem 1rem", boxShadow: "0 1px 2px rgba(0,0,0,0.05)" }}>
+                <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#28a428", boxShadow: "0 0 6px rgba(40,164,40,0.6)" }} />
+                <span style={{ fontSize: "0.75rem", fontWeight: 600, color: "#475569" }}>{user.email}</span>
+              </div>
+            </div>
+          </div>
+          <div className="desktop-content">
+            <AnimatePresence mode="wait">
+              <motion.div key={page} initial={anim.page.initial} animate={anim.page.animate} exit={anim.page.exit}>
+                {renderPage()}
+              </motion.div>
+            </AnimatePresence>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mobile-shell">
+      <BgCanvas />
+      <Topbar title={PAGE_TITLES[page]} />
+      <div className="mobile-content">
+        <AnimatePresence mode="wait">
+          <motion.div key={page} initial={anim.page.initial} animate={anim.page.animate} exit={anim.page.exit}>
+            {renderPage()}
+          </motion.div>
+        </AnimatePresence>
+      </div>
+      <BottomNav tabs={tabs} />
+    </div>
+  );
+};
+
+// ═══════════════════════════════════════════════════════════
+// § GLOBAL STYLES
+// ═══════════════════════════════════════════════════════════
+const CSS = `
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@500;700&display=swap');
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --jade-50:  #f0faf0; --jade-100: #dcf5dc; --jade-200: #b8ecb8;
+  --jade-300: #82da82; --jade-400: #4ec94e; --jade-500: #28a428;
+  --jade-600: #1e7d1e; --jade-700: #175c17; --jade-800: #114011;
+  --font: 'Inter', -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+}
+
+html, body, #root { height: 100%; }
+body {
+  font-family: var(--font);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow-x: hidden;
+  background: #e8f5e8;
+}
+
+/* ── Background blobs ── */
+.bg-blob {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(70px);
+  opacity: 0.55;
+  animation: blobFloat 14s ease-in-out infinite alternate;
+}
+.bg-blob-1 { width:420px;height:420px; background:radial-gradient(circle,#a8e68a,transparent 70%); top:-80px;left:-60px;animation-delay:0s }
+.bg-blob-2 { width:320px;height:320px; background:radial-gradient(circle,#b8f0d0,transparent 70%); top:25%;right:-40px;animation-delay:-3.5s }
+.bg-blob-3 { width:280px;height:280px; background:radial-gradient(circle,#c8e8ff,transparent 70%); bottom:5%;left:5%;animation-delay:-7s }
+.bg-blob-4 { width:220px;height:220px; background:radial-gradient(circle,#ffe8b0,transparent 70%); bottom:20%;right:5%;animation-delay:-10.5s }
+.bg-mesh   { position:absolute;inset:0;opacity:0.03;background-image:linear-gradient(rgba(0,0,0,0.1) 1px,transparent 1px),linear-gradient(90deg,rgba(0,0,0,0.1) 1px,transparent 1px);background-size:40px 40px }
+@keyframes blobFloat { from{transform:translate(0,0) scale(1)} to{transform:translate(22px,32px) scale(1.08)} }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
+
+/* ── Hero banner ── */
+.hero-banner {
+  background: linear-gradient(135deg, rgba(40,164,40,0.9) 0%, rgba(23,92,23,0.95) 100%);
+  border-radius: 1.5rem;
+  padding: 1.75rem;
+  position: relative;
+  overflow: hidden;
+  border: 1px solid rgba(255,255,255,0.18);
+  box-shadow: 0 16px 48px rgba(23,92,23,0.28), inset 0 1px 0 rgba(255,255,255,0.18);
+}
+.hero-content { position: relative; z-index: 1; }
+.hero-orb { position:absolute;width:180px;height:180px;background:radial-gradient(circle,rgba(255,255,255,0.12),transparent 70%);border-radius:50%;right:-40px;top:-40px;z-index:0 }
+.hero-orb-2 { width:100px;height:100px;bottom:-20px;right:60px;top:auto }
+
+/* ── Customer card ── */
+.customer-card {
+  display: flex;
+  align-items: center;
+  gap: 0.875rem;
+  padding: 0.875rem 1rem;
+  background: rgba(255,255,255,0.60);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid rgba(255,255,255,0.72);
+  border-radius: 1rem;
+  margin-bottom: 0.625rem;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.04), inset 0 1px 0 rgba(255,255,255,0.6);
+}
+.customer-card-active {
+  background: rgba(240,250,240,0.82);
+  border-color: rgba(40,164,40,0.32);
+  box-shadow: 0 8px 28px rgba(40,164,40,0.14), inset 0 1px 0 rgba(255,255,255,0.7);
+}
+
+/* ── Field chip ── */
+.field-chip {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.875rem 1rem;
+  background: rgba(255,255,255,0.55);
+  border: 1px solid rgba(255,255,255,0.72);
+  border-radius: 1rem;
+  margin-bottom: 0.625rem;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.04), inset 0 1px 0 rgba(255,255,255,0.6);
+}
+
+/* ── Auth screen ── */
+.auth-wrap {
+  min-height: 100dvh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  position: relative;
+  z-index: 1;
+}
+.auth-inner { width: 100%; max-width: 420px; }
+.auth-logo-wrap { display: flex; align-items: center; gap: 1rem; margin-bottom: 2rem; }
+.auth-logo {
+  width: 52px; height: 52px;
+  background: linear-gradient(135deg, #28a428, #175c17);
+  border-radius: 16px;
+  display: flex; align-items: center; justify-content: center;
+  color: #fff; flex-shrink: 0;
+  box-shadow: 0 8px 24px rgba(23,92,23,0.35);
+}
+.auth-app-name { font-size: 1.5rem; font-weight: 900; color: #175c17; letter-spacing: -0.03em; line-height: 1.2; }
+.auth-tagline  { font-size: 0.875rem; color: #64748b; margin-top: 2px; font-weight: 500; }
+.auth-card {
+  background: rgba(255,255,255,0.70);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid rgba(255,255,255,0.85);
+  border-radius: 1.75rem;
+  padding: 2rem;
+  box-shadow: 0 24px 64px rgba(23,92,23,0.14), 0 8px 24px rgba(0,0,0,0.08), inset 0 1px 0 rgba(255,255,255,0.8);
+}
+
+/* ── Role tabs ── */
+.role-tabs {
+  display: flex;
+  background: rgba(241,245,249,0.7);
+  border-radius: 0.875rem;
+  padding: 4px;
+  margin-bottom: 1.25rem;
+  border: 1px solid rgba(255,255,255,0.7);
+}
+.role-tab {
+  flex: 1; font-family: var(--font); font-size: 0.8125rem; font-weight: 700;
+  padding: 8px 4px; border-radius: 0.625rem; border: none; cursor: pointer;
+  transition: all 0.2s ease; color: #64748b; background: transparent; min-height: 36px;
+}
+.role-tab-active {
+  background: linear-gradient(135deg, #28a428, #175c17);
+  color: #fff; box-shadow: 0 4px 12px rgba(23,92,23,0.30);
+}
+
+/* ── Sidebar ── */
+.sidebar {
+  display: flex; flex-direction: column; width: 240px; flex-shrink: 0;
+  background: rgba(255,255,255,0.58); backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px); border-right: 1px solid rgba(255,255,255,0.70);
+  height: 100vh; position: sticky; top: 0; overflow-y: auto;
+  box-shadow: 4px 0 24px rgba(23,92,23,0.06); z-index: 10;
+}
+.sidebar::-webkit-scrollbar { display: none; }
+.sidebar-brand { display: flex; align-items: center; gap: 11px; padding: 24px 18px 20px; border-bottom: 1px solid rgba(241,245,249,0.8); }
+.brand-icon {
+  width: 38px; height: 38px; background: linear-gradient(135deg, #28a428, #175c17);
+  border-radius: 12px; display: flex; align-items: center; justify-content: center;
+  color: #fff; flex-shrink: 0; box-shadow: 0 6px 16px rgba(23,92,23,0.30);
+}
+.brand-icon-sm { width: 30px; height: 30px; border-radius: 9px; }
+.brand-name { font-size: 0.9375rem; font-weight: 900; color: #175c17; letter-spacing: -0.02em; }
+.brand-sub  { font-size: 0.6875rem; color: #94a3b8; font-weight: 600; margin-top: 1px; }
+.sidebar-nav { flex: 1; padding: 12px 10px; display: flex; flex-direction: column; gap: 2px; }
+.sidebar-section-label { font-size: 0.625rem; font-weight: 800; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.12em; padding: 2px 10px 10px; }
+.sidebar-item {
+  display: flex; align-items: center; gap: 10px; padding: 10px 12px;
+  border-radius: 0.75rem; cursor: pointer; border: none; background: none;
+  font-family: var(--font); font-size: 0.875rem; font-weight: 600; color: #475569;
+  text-align: left; width: 100%; transition: background 0.15s, color 0.15s;
+  position: relative; overflow: hidden;
+}
+.sidebar-item:hover { background: rgba(255,255,255,0.7); color: var(--jade-700); }
+.sidebar-item-active { background: rgba(240,250,240,0.8); color: var(--jade-700); font-weight: 700; border: 1px solid rgba(40,164,40,0.18); }
+.sidebar-icon { width: 30px; height: 30px; border-radius: 8px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.sidebar-icon-active { background: rgba(40,164,40,0.14); }
+.sidebar-active-pill { position: absolute; left: 0; top: 50%; transform: translateY(-50%); width: 3px; height: 60%; background: var(--jade-500); border-radius: 0 3px 3px 0; }
+.sidebar-footer { padding: 14px 10px; border-top: 1px solid rgba(241,245,249,0.8); }
+.sidebar-user { display: flex; align-items: center; gap: 9px; padding: 0 4px; }
+
+/* ── Mobile shell ── */
+.mobile-shell {
+  position: relative; z-index: 1; display: flex; flex-direction: column;
+  height: 100dvh; max-width: 430px; margin: 0 auto; overflow: hidden;
+}
+.topbar {
+  flex-shrink: 0; display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 16px; background: rgba(255,255,255,0.65); backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px); border-bottom: 1px solid rgba(255,255,255,0.72);
+  box-shadow: 0 4px 20px rgba(23,92,23,0.08); z-index: 10;
+}
+.topbar-brand { display: flex; align-items: center; gap: 9px; }
+.topbar-title { font-size: 0.9375rem; font-weight: 900; color: var(--jade-700); letter-spacing: -0.02em; }
+.mobile-content {
+  flex: 1; overflow-y: auto; overflow-x: hidden;
+  padding: 18px 14px; padding-bottom: calc(88px + 16px);
+  -webkit-overflow-scrolling: touch;
+}
+.mobile-content::-webkit-scrollbar { display: none; }
+.bottom-bar {
+  position: absolute; bottom: 10px; left: 10px; right: 10px; height: 64px;
+  background: rgba(255,255,255,0.72); backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px); border: 1px solid rgba(255,255,255,0.80);
+  border-radius: 22px; display: flex; align-items: center; justify-content: space-around;
+  padding: 0 8px; z-index: 20;
+  box-shadow: 0 8px 32px rgba(23,92,23,0.14), inset 0 1px 0 rgba(255,255,255,0.85);
+}
+.bnav-btn { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 6px 4px; cursor: pointer; border: none; background: none; border-radius: 14px; color: #94a3b8; font-family: var(--font); }
+.bnav-active { color: var(--jade-700); }
+.bnav-icon { width: 38px; height: 38px; border-radius: 12px; display: flex; align-items: center; justify-content: center; position: relative; }
+.bnav-icon-active { background: linear-gradient(135deg, rgba(40,164,40,0.18), rgba(23,92,23,0.12)); box-shadow: 0 4px 12px rgba(40,164,40,0.20); }
+.bnav-dot { position: absolute; bottom: -5px; left: 50%; transform: translateX(-50%); width: 4px; height: 4px; border-radius: 50%; background: var(--jade-500); box-shadow: 0 0 6px rgba(40,164,40,0.7); }
+.bnav-label { font-size: 10px; font-weight: 700; letter-spacing: 0.03em; }
+
+/* ── Desktop shell ── */
+.desktop-shell { display: flex; height: 100vh; position: relative; z-index: 1; overflow: hidden; }
+.desktop-main { flex: 1; display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
+.desktop-topbar {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 40px; height: 64px; flex-shrink: 0;
+  background: rgba(255,255,255,0.58); backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px); border-bottom: 1px solid rgba(255,255,255,0.70);
+  box-shadow: 0 4px 16px rgba(23,92,23,0.05);
+}
+.desktop-content { flex: 1; overflow-y: auto; padding: 36px 40px; }
+.desktop-content::-webkit-scrollbar { width: 4px; }
+.desktop-content::-webkit-scrollbar-track { background: transparent; }
+.desktop-content::-webkit-scrollbar-thumb { background: rgba(40,164,40,0.22); border-radius: 4px; }
+
+@media (max-width: 640px) {
+  .mobile-shell { max-width: 100%; }
+  .mobile-content { padding: 14px 12px; padding-bottom: calc(88px + 14px); }
+}
+@media (min-width: 640px) and (max-width: 1023px) {
+  .mobile-shell { max-width: 100%; }
+  .mobile-content { padding: 22px 24px; padding-bottom: calc(88px + 22px); }
+}
+@media (min-width: 1024px) {
+  .mobile-shell { display: none; }
+}
+`;
+
+// ═══════════════════════════════════════════════════════════
+// § ROOT EXPORT
+// ═══════════════════════════════════════════════════════════
+export default function App() {
+  return (
+    <>
+      <style>{CSS}</style>
+      <AppProvider>
+        <Shell />
+      </AppProvider>
+    </>
+  );
+}
